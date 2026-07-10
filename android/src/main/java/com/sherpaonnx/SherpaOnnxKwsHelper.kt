@@ -102,6 +102,7 @@ internal class SherpaOnnxKwsHelper(
     numThreads: Double?,
     provider: String?,
     debug: Boolean?,
+    modelType: String?,
     promise: Promise
   ) {
     try {
@@ -122,7 +123,11 @@ internal class SherpaOnnxKwsHelper(
           numThreads = numThreads?.toInt() ?: 1,
           debug = debug ?: false,
           provider = provider ?: "cpu",
-          modelType = "zipformer"
+          // KWS zipformer models (kws-zipformer-gigaspeech/wenetspeech) are
+          // zipformer2 exports. "zipformer" selects the zipformer1 loader,
+          // which fatally exits on missing 'attention_dims' metadata —
+          // observed on-device 2026-07-10 (GP-2026-012 S1a first run).
+          modelType = modelType ?: "zipformer2"
         ),
         maxActivePaths = maxActivePaths?.toInt() ?: 4,
         keywordsFile = resolvedKeywordsFile,

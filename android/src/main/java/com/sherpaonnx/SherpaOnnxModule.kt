@@ -626,6 +626,7 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
     val numThreads = if (options.hasKey("numThreads")) options.getDouble("numThreads") else null
     val provider = if (options.hasKey("provider")) options.getString("provider") else null
     val debug = if (options.hasKey("debug")) options.getBoolean("debug") else null
+    val modelType = if (options.hasKey("modelType")) options.getString("modelType") else null
     kwsHelper.initializeKws(
       instanceId,
       modelDir,
@@ -637,6 +638,7 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
       numThreads,
       provider,
       debug,
+      modelType,
       promise
     )
   }

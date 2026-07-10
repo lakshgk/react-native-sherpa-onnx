@@ -245,6 +245,8 @@ export interface Spec extends TurboModule {
       numThreads?: number;
       provider?: string;
       debug?: boolean;
+      /** Online transducer variant. KWS zipformer packages are zipformer2 exports; defaults to 'zipformer2'. */
+      modelType?: string;
     }
   ): Promise<{ success: boolean; error?: string }>;
 

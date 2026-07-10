@@ -60,6 +60,7 @@ export async function createKeywordSpotter(
     numThreads: options.numThreads,
     provider: options.provider,
     debug: options.debug,
+    modelType: options.modelType,
   });
   if (!initResult || initResult.success !== true) {
     throw new Error(

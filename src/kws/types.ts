@@ -27,6 +27,11 @@ export interface KwsInitOptions {
   numThreads?: number;
   provider?: string;
   debug?: boolean;
+  /**
+   * Online transducer variant for the KWS model. The published
+   * kws-zipformer packages are zipformer2 exports; defaults to 'zipformer2'.
+   */
+  modelType?: string;
 }
 
 export interface KwsDetection {

@@ -221,6 +221,65 @@ export interface Spec extends TurboModule {
     isEndpoint: boolean;
   }>;
 
+  // ==================== Keyword Spotting (KWS) Methods ====================
+
+  /**
+   * Initialize a sherpa-onnx open-vocabulary KeywordSpotter (single options object,
+   * mirroring initializeOnlineSttWithOptions).
+   * Android only for now; iOS implementation pending.
+   * @param instanceId - Unique ID for this spotter instance
+   * @param options - modelDir (zipformer-transducer KWS model: encoder/decoder/joiner .onnx
+   *   + tokens.txt), keywordsFile (sherpa-onnx tokenized keywords format), and optional
+   *   tuning params (keywordsScore, keywordsThreshold, maxActivePaths, numTrailingBlanks,
+   *   numThreads, provider, debug).
+   */
+  initializeKwsWithOptions(
+    instanceId: string,
+    options: {
+      modelDir: string;
+      keywordsFile: string;
+      keywordsScore?: number;
+      keywordsThreshold?: number;
+      maxActivePaths?: number;
+      numTrailingBlanks?: number;
+      numThreads?: number;
+      provider?: string;
+      debug?: boolean;
+    }
+  ): Promise<{ success: boolean; error?: string }>;
+
+  /** Create a new stream for the given KeywordSpotter instance. Optional per-stream keywords override (tokenized format). */
+  createKwsStream(
+    instanceId: string,
+    streamId: string,
+    keywords?: string
+  ): Promise<void>;
+
+  /**
+   * Convenience: feed audio, decode while ready, return spotting result. `detected` is true
+   * when `keyword` is non-empty; the stream is reset natively after a detection so it is
+   * immediately re-armed.
+   */
+  processKwsAudioChunk(
+    streamId: string,
+    samples: number[],
+    sampleRate: number
+  ): Promise<{
+    keyword: string;
+    tokens: string[];
+    timestamps: number[];
+    detected: boolean;
+  }>;
+
+  /** Reset KWS stream state. */
+  resetKwsStream(streamId: string): Promise<void>;
+
+  /** Release KWS stream and remove from native state. */
+  releaseKwsStream(streamId: string): Promise<void>;
+
+  /** Release KeywordSpotter and all its streams. */
+  unloadKws(instanceId: string): Promise<void>;
+
   /**
    * Start native PCM live capture. Microphone audio is captured and resampled to the requested
    * sampleRate; chunks are emitted via the "pcmLiveStreamData" event (base64 Int16 PCM).

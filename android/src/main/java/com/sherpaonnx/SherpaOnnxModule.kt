@@ -63,6 +63,10 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
     { modelDir, modelType -> Companion.nativeDetectEnhancementModel(modelDir, modelType) }
   )
   private val archiveHelper = SherpaOnnxArchiveHelper()
+  // N8 spike (Smriti C2): openWakeWord pipeline fed by the PCM capture tee below.
+  private val wakeWordHelper = OpenWakeWordHelper(NAME) { score, timestamp, detected ->
+    emitWakeWordScore(score, timestamp, detected)
+  }
   private var pcmCapture: SherpaOnnxPcmCapture? = null
 
   override fun getName(): String {
@@ -75,6 +79,7 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
     pcmCapture = null
     onlineSttHelper.shutdown()
     kwsHelper.shutdown()
+    wakeWordHelper.shutdown()
     ttsHelper.shutdown()
     alignmentHelper.shutdown()
     enhancementHelper.shutdown()
@@ -684,7 +689,9 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
             emitPcmLiveStreamError(msg)
           }
         },
-        logTag = NAME
+        logTag = NAME,
+        // N8 spike tee: no-op unless the wake-word detector is initialized AND started.
+        onRawChunk = { samples, sr -> wakeWordHelper.acceptPcmChunk(samples, sr) }
       )
       pcmCapture = capture
       capture.start()
@@ -726,6 +733,46 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
     val payload = Arguments.createMap()
     payload.putString("message", message)
     eventEmitter.emit("pcmLiveStreamError", payload)
+  }
+
+  // ==================== Wake Word (openWakeWord) Methods — N8 spike ====================
+
+  override fun initializeWakeWord(options: ReadableMap, promise: Promise) {
+    try {
+      val melspectrogramPath = options.getString("melspectrogramPath")
+        ?: throw IllegalArgumentException("melspectrogramPath is required")
+      val embeddingPath = options.getString("embeddingPath")
+        ?: throw IllegalArgumentException("embeddingPath is required")
+      val classifierPath = options.getString("classifierPath")
+        ?: throw IllegalArgumentException("classifierPath is required")
+      val threshold = if (options.hasKey("threshold")) options.getDouble("threshold") else null
+      wakeWordHelper.initialize(melspectrogramPath, embeddingPath, classifierPath, threshold, promise)
+    } catch (e: Exception) {
+      android.util.Log.e(NAME, "initializeWakeWord failed", e)
+      promise.reject("OWW_INIT_ERROR", e.message ?: "initializeWakeWord failed", e)
+    }
+  }
+
+  override fun startWakeWordDetection(promise: Promise) {
+    wakeWordHelper.start(promise)
+  }
+
+  override fun stopWakeWordDetection(promise: Promise) {
+    wakeWordHelper.stop(promise)
+  }
+
+  override fun unloadWakeWord(promise: Promise) {
+    wakeWordHelper.unload(promise)
+  }
+
+  private fun emitWakeWordScore(score: Float, timestamp: Long, detected: Boolean) {
+    val eventEmitter = reactApplicationContext
+      .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+    val payload = Arguments.createMap()
+    payload.putDouble("score", score.toDouble())
+    payload.putDouble("timestamp", timestamp.toDouble())
+    payload.putBoolean("detected", detected)
+    eventEmitter.emit("wakeWordScore", payload)
   }
 
   // ==================== STT Methods ====================

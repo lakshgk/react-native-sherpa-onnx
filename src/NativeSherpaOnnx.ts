@@ -296,6 +296,35 @@ export interface Spec extends TurboModule {
   /** Stop native PCM live capture. */
   stopPcmLiveStream(): Promise<void>;
 
+  // ==================== Wake Word (openWakeWord) Methods — N8 spike ====================
+
+  /**
+   * Initialize the openWakeWord three-stage detector (melspectrogram → embedding →
+   * classifier), running on the ONNX Runtime bundled with this SDK. All paths are
+   * absolute filesystem paths (a leading file:// is tolerated and stripped).
+   * Android only; iOS implementation pending. SPIKE: threshold is a placeholder
+   * for the emitted `detected` flag only — no consecutive-frames gate.
+   */
+  initializeWakeWord(options: {
+    melspectrogramPath: string;
+    embeddingPath: string;
+    classifierPath: string;
+    threshold?: number;
+  }): Promise<{ success: boolean }>;
+
+  /**
+   * Start emitting "wakeWordScore" events ({ score, timestamp, detected }, ~12.5 Hz)
+   * fed by a native tee of the PCM live stream. Requires initializeWakeWord first,
+   * and only produces events while a PCM live stream is running.
+   */
+  startWakeWordDetection(): Promise<void>;
+
+  /** Stop wake-word score emission (detector stays initialized). */
+  stopWakeWordDetection(): Promise<void>;
+
+  /** Release the wake-word ONNX sessions and streaming state. */
+  unloadWakeWord(): Promise<void>;
+
   // ==================== TTS Methods ====================
 
   /**

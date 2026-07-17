@@ -63,6 +63,12 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
     { modelDir, modelType -> Companion.nativeDetectEnhancementModel(modelDir, modelType) }
   )
   private val archiveHelper = SherpaOnnxArchiveHelper()
+  // Wake word (Smriti C2, GP-2026-015): openWakeWord pipeline fed by the PCM
+  // capture tee below. Emits raw, undeduplicated detection events (one per
+  // ≥threshold inference frame) — dedup is the JS consumer's job (DL-065).
+  private val wakeWordHelper = OpenWakeWordHelper(NAME) { confidence, timestampMs ->
+    emitWakeWordDetection(confidence, timestampMs)
+  }
   private var pcmCapture: SherpaOnnxPcmCapture? = null
 
   override fun getName(): String {
@@ -75,6 +81,7 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
     pcmCapture = null
     onlineSttHelper.shutdown()
     kwsHelper.shutdown()
+    wakeWordHelper.shutdown()
     ttsHelper.shutdown()
     alignmentHelper.shutdown()
     enhancementHelper.shutdown()
@@ -684,7 +691,10 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
             emitPcmLiveStreamError(msg)
           }
         },
-        logTag = NAME
+        logTag = NAME,
+        // Wake-word tee (INV-OWW-002): no-op unless the detector is
+        // initialized AND started; never blocks the capture thread.
+        onRawChunk = { samples, sr -> wakeWordHelper.acceptPcmChunk(samples, sr) }
       )
       pcmCapture = capture
       capture.start()
@@ -726,6 +736,61 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
     val payload = Arguments.createMap()
     payload.putString("message", message)
     eventEmitter.emit("pcmLiveStreamError", payload)
+  }
+
+  // ==================== Wake Word (openWakeWord) Methods ====================
+  // Smriti C2 / GP-2026-015 Prompt 1. See OpenWakeWordHelper.kt for the spec
+  // provenance header, Rule 16 port citations, and invariant contracts.
+
+  override fun initializeWakeWord(options: ReadableMap, promise: Promise) {
+    try {
+      val melspectrogramPath = options.getString("melspectrogramPath")
+        ?: throw IllegalArgumentException("melspectrogramPath is required")
+      val embeddingPath = options.getString("embeddingPath")
+        ?: throw IllegalArgumentException("embeddingPath is required")
+      val classifierPath = options.getString("classifierPath")
+        ?: throw IllegalArgumentException("classifierPath is required")
+      // The threshold is the signed wake_word_model attribute (DL-058:
+      // threshold-only). Required — no library default may stand in for the
+      // signed value.
+      if (!options.hasKey("threshold") || options.isNull("threshold")) {
+        throw IllegalArgumentException("threshold is required (signed wake_word_model attribute)")
+      }
+      val threshold = options.getDouble("threshold")
+      wakeWordHelper.initialize(melspectrogramPath, embeddingPath, classifierPath, threshold, promise)
+    } catch (e: Exception) {
+      android.util.Log.e(NAME, "initializeWakeWord failed", e)
+      promise.reject("OWW_INIT_ERROR", e.message ?: "initializeWakeWord failed", e)
+    }
+  }
+
+  override fun startWakeWordDetection(promise: Promise) {
+    wakeWordHelper.start(promise)
+  }
+
+  override fun stopWakeWordDetection(promise: Promise) {
+    wakeWordHelper.stop(promise)
+  }
+
+  override fun unloadWakeWord(promise: Promise) {
+    wakeWordHelper.unload(promise)
+  }
+
+  /**
+   * Detection event: { verb: null, confidence, timestamp } — the two-stage
+   * voice_command shape (UL-014 v2) with the VERB stage unfilled; the JS
+   * layers own verb capture. timestamp is NATIVE epoch-millis at inference
+   * completion (JS dedup compares against this, not arrival time — DL-065).
+   * Emitted once per ≥threshold frame, raw and undeduplicated.
+   */
+  private fun emitWakeWordDetection(confidence: Float, timestampMs: Long) {
+    val eventEmitter = reactApplicationContext
+      .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+    val payload = Arguments.createMap()
+    payload.putNull("verb")
+    payload.putDouble("confidence", confidence.toDouble())
+    payload.putDouble("timestamp", timestampMs.toDouble())
+    eventEmitter.emit("wakeWordDetection", payload)
   }
 
   // ==================== STT Methods ====================

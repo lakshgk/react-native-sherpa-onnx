@@ -296,6 +296,39 @@ export interface Spec extends TurboModule {
   /** Stop native PCM live capture. */
   stopPcmLiveStream(): Promise<void>;
 
+  // ==================== Wake Word (openWakeWord) Methods ====================
+
+  /**
+   * Initialize the openWakeWord three-stage detector (melspectrogram → embedding →
+   * classifier), running on the ONNX Runtime bundled with this SDK. All paths are
+   * absolute filesystem paths (a leading file:// is tolerated and stripped).
+   * `threshold` is the signed wake_word_model detection threshold and is
+   * REQUIRED — the native layer supplies no default (DL-058: threshold-only
+   * gating; there is no frame-count parameter). Android only; iOS pending.
+   */
+  initializeWakeWord(options: {
+    melspectrogramPath: string;
+    embeddingPath: string;
+    classifierPath: string;
+    threshold: number;
+  }): Promise<{ success: boolean }>;
+
+  /**
+   * Start wake-word detection, fed by a native tee of the PCM live stream
+   * (single mic client; only produces events while a PCM live stream is
+   * running). Emits a "wakeWordDetection" event ({ verb: null, confidence,
+   * timestamp }) for EVERY 80 ms inference frame scoring ≥ threshold — raw
+   * and undeduplicated; consumers own dedup against the native `timestamp`
+   * (DL-065). Requires initializeWakeWord first.
+   */
+  startWakeWordDetection(): Promise<void>;
+
+  /** Stop wake-word detection (detector stays initialized). */
+  stopWakeWordDetection(): Promise<void>;
+
+  /** Release the wake-word ONNX sessions and streaming state. */
+  unloadWakeWord(): Promise<void>;
+
   // ==================== TTS Methods ====================
 
   /**

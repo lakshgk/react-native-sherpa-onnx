@@ -21,7 +21,14 @@ class SherpaOnnxPcmCapture(
   private val bufferSizeFrames: Int,
   private val onChunk: (base64Pcm: String, sampleRate: Int) -> Unit,
   private val onError: (message: String) -> Unit,
-  private val logTag: String = "SherpaOnnxPcmCapture"
+  private val logTag: String = "SherpaOnnxPcmCapture",
+  /**
+   * Optional raw tee, invoked with the post-resample Int16 chunk BEFORE base64
+   * encoding — lets a second native consumer (wake-word detection) share this
+   * single mic client without a JS round-trip. Must not block: the callee owns
+   * its own buffering/threading. No behavior change when null.
+   */
+  private val onRawChunk: ((samples: ShortArray, sampleRate: Int) -> Unit)? = null
 ) {
   private var audioRecord: AudioRecord? = null
   @Volatile
@@ -111,6 +118,7 @@ class SherpaOnnxPcmCapture(
           } else {
             chunk
           }
+          onRawChunk?.invoke(toEmit, targetSampleRate)
           val byteBuf = ByteBuffer.allocate(toEmit.size * 2).order(ByteOrder.LITTLE_ENDIAN)
           for (s in toEmit) byteBuf.putShort(s)
           val base64 = Base64.encodeToString(byteBuf.array(), Base64.NO_WRAP)

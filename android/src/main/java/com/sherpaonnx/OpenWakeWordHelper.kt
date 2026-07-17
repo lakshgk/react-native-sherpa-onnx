@@ -42,7 +42,8 @@ import kotlin.random.Random
  *
  * SPIKE SCOPE: placeholder threshold (default 0.5) for a detected flag only;
  * NO minimum-consecutive-frames gate (DQ-C2-04's signed values are
- * Generate-phase). Raw {score, timestamp} emitted per processed chunk.
+ * Generate-phase). Raw {score, timestamp} emitted per 1280-sample block
+ * (true 12.5 Hz — see pendingSamples doc for the cadence-fix rationale).
  */
 internal class OpenWakeWordHelper(
   private val logTag: String,
@@ -84,6 +85,20 @@ internal class OpenWakeWordHelper(
   private var running = false
   private var workerThread: Thread? = null
   private var droppedChunks = 0
+
+  /**
+   * Worker-thread-only carry buffer for re-chunking tee'd audio into exact
+   * N_PREPARED_SAMPLES blocks. N8 finding (2026-07-17, first device session):
+   * predicting once per ~120 ms capture chunk (~8.3 Hz) destroys the
+   * frame-count separation between true positives and suryati-class
+   * confusables that the 12.5 Hz reference cadence shows — 2/6 true positives
+   * logged a single frame >=0.5 while the suryati clip logged 2. Feeding the
+   * state machine exact 1280-sample blocks, one prediction each, restores the
+   * reference behavior (dscripka Model.predict consumes 1280-sample chunks;
+   * Re-MENTIA inherits the per-call predict at whatever its recorder chunk
+   * size is — the reference, not the port source, is authoritative here).
+   */
+  private var pendingSamples = floatArrayOf()
 
   val isInitialized: Boolean
     get() = classifierSession != null
@@ -145,12 +160,26 @@ internal class OpenWakeWordHelper(
           }
           if (!running) break
           try {
-            val score = processChunk(chunk)
-            val detected = score >= threshold
-            if (detected) {
-              Log.i(logTag, "OWW_DETECTION score=${"%.5f".format(score)}")
+            // Re-chunk to exact 1280-sample blocks; one prediction per block
+            // (true 12.5 Hz — see pendingSamples doc above).
+            val buf = if (pendingSamples.isEmpty()) chunk else pendingSamples + chunk
+            var off = 0
+            while (off + N_PREPARED_SAMPLES <= buf.size) {
+              val block = buf.copyOfRange(off, off + N_PREPARED_SAMPLES)
+              off += N_PREPARED_SAMPLES
+              val score = processChunk(block)
+              val detected = score >= threshold
+              // Dense frame-shape instrumentation for calibration evidence:
+              // every non-floor score, adb-visible.
+              if (score >= 0.1f) {
+                Log.i(logTag, "OWW_FRAME score=${"%.5f".format(score)}")
+              }
+              if (detected) {
+                Log.i(logTag, "OWW_DETECTION score=${"%.5f".format(score)}")
+              }
+              onScore(score, System.currentTimeMillis(), detected)
             }
-            onScore(score, System.currentTimeMillis(), detected)
+            pendingSamples = buf.copyOfRange(off, buf.size)
           } catch (e: Exception) {
             Log.e(logTag, "OWW worker inference error: ${e.message}", e)
           }
@@ -169,6 +198,7 @@ internal class OpenWakeWordHelper(
     workerThread?.join(2000)
     workerThread = null
     queue.clear()
+    pendingSamples = floatArrayOf()
     promise?.resolve(null)
   }
 

@@ -329,6 +329,59 @@ export interface Spec extends TurboModule {
   /** Release the wake-word ONNX sessions and streaming state. */
   unloadWakeWord(): Promise<void>;
 
+  // ==================== VAD (Silero) Methods ====================
+
+  /**
+   * Initialize the Silero VAD over the sherpa-onnx native VoiceActivityDetector.
+   * `modelPath` is an absolute filesystem path to silero_vad.onnx (a leading
+   * file:// is tolerated and stripped); the k2-fsa v4 export is expected.
+   *
+   * ⚠ `sampleRate` MUST be 16000 and `windowSize` MUST be 512 — the native
+   * layer calls exit(-1) (process death, no exception) on other values. Both
+   * are validated in Kotlin before the native object is constructed.
+   *
+   * ⚠ `maxSpeechDuration` is NOT a segment cut. Upstream it is a soft
+   * pressure valve: past it, minSilenceDuration drops to 0.1s and threshold
+   * rises to 0.90 to hunt for a break, but a speaker who never pauses never
+   * closes a segment and the internal buffer grows without bound. Use
+   * `maxSegmentMs` for a real cap.
+   *
+   * @param maxSegmentMs App-side hard cap in ms; the segment is force-flushed
+   *   (and tagged forcedByCap) once it has been open this long. 0 disables
+   *   the cap — uncapped is only appropriate when deliberately observing the
+   *   unbounded-growth behaviour. Android only; iOS pending.
+   */
+  initializeVad(options: {
+    modelPath: string;
+    threshold?: number;
+    minSilenceDuration?: number;
+    minSpeechDuration?: number;
+    maxSpeechDuration?: number;
+    windowSize?: number;
+    sampleRate?: number;
+    maxSegmentMs?: number;
+    debug?: boolean;
+  }): Promise<{ success: boolean }>;
+
+  /**
+   * Start VAD segmentation, fed by a native tee of the PCM live stream (the
+   * same single mic client the wake-word detector shares; only produces
+   * events while a PCM live stream is running). Emits a "vadSpeechSegment"
+   * event per completed speech segment: { base64Pcm, startSample,
+   * sampleCount, viaFlush, forcedByCap, latencyMs }. Requires initializeVad.
+   */
+  startVadDetection(): Promise<void>;
+
+  /**
+   * Stop VAD segmentation (VAD stays initialized). Flushes any in-progress
+   * segment first — a flushed segment is emitted with viaFlush: true and,
+   * unlike a naturally-closed one, retains its trailing silence.
+   */
+  stopVadDetection(): Promise<void>;
+
+  /** Release the native VAD. */
+  unloadVad(): Promise<void>;
+
   // ==================== TTS Methods ====================
 
   /**

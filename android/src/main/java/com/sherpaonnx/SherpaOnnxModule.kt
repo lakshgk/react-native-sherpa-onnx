@@ -69,6 +69,13 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
   private val wakeWordHelper = OpenWakeWordHelper(NAME) { confidence, timestampMs ->
     emitWakeWordDetection(confidence, timestampMs)
   }
+  // VAD (Smriti DL-104 Direction A): Silero VAD over the same PCM capture tee.
+  // Enabling work for the Rule 15 / §N8 device spike — see
+  // SherpaOnnxVadHelper.kt for the hazard notes and thread-confinement rules.
+  private val vadHelper = SherpaOnnxVadHelper(NAME) {
+    base64Pcm, startSample, sampleCount, viaFlush, forcedByCap, latencyMs ->
+    emitVadSpeechSegment(base64Pcm, startSample, sampleCount, viaFlush, forcedByCap, latencyMs)
+  }
   private var pcmCapture: SherpaOnnxPcmCapture? = null
 
   override fun getName(): String {
@@ -82,6 +89,7 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
     onlineSttHelper.shutdown()
     kwsHelper.shutdown()
     wakeWordHelper.shutdown()
+    vadHelper.shutdown()
     ttsHelper.shutdown()
     alignmentHelper.shutdown()
     enhancementHelper.shutdown()
@@ -694,7 +702,13 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
         logTag = NAME,
         // Wake-word tee (INV-OWW-002): no-op unless the detector is
         // initialized AND started; never blocks the capture thread.
-        onRawChunk = { samples, sr -> wakeWordHelper.acceptPcmChunk(samples, sr) }
+        // Both native tee consumers share this single mic client. Each is a
+        // no-op unless its own detector is initialized AND started, and
+        // neither may block the capture thread.
+        onRawChunk = { samples, sr ->
+          wakeWordHelper.acceptPcmChunk(samples, sr)
+          vadHelper.acceptPcmChunk(samples, sr)
+        }
       )
       pcmCapture = capture
       capture.start()
@@ -791,6 +805,79 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
     payload.putDouble("confidence", confidence.toDouble())
     payload.putDouble("timestamp", timestampMs.toDouble())
     eventEmitter.emit("wakeWordDetection", payload)
+  }
+
+  // ==================== VAD (Silero) Methods ====================
+  // Smriti DL-104 Direction A. See SherpaOnnxVadHelper.kt for the hazard
+  // notes (thread confinement, exit(-1) config paths, post-release segfault,
+  // and why maxSpeechDuration is not a segment cap).
+
+  override fun initializeVad(options: ReadableMap, promise: Promise) {
+    try {
+      val modelPath = options.getString("modelPath")
+        ?: throw IllegalArgumentException("modelPath is required")
+      // Every numeric below is validated in the helper BEFORE the native Vad
+      // is constructed: several bad values reach exit(-1) natively, which
+      // kills the process rather than throwing.
+      val threshold = if (options.hasKey("threshold")) options.getDouble("threshold") else 0.5
+      val minSilenceDuration =
+        if (options.hasKey("minSilenceDuration")) options.getDouble("minSilenceDuration") else 0.25
+      val minSpeechDuration =
+        if (options.hasKey("minSpeechDuration")) options.getDouble("minSpeechDuration") else 0.25
+      val maxSpeechDuration =
+        if (options.hasKey("maxSpeechDuration")) options.getDouble("maxSpeechDuration") else 5.0
+      val windowSize = if (options.hasKey("windowSize")) options.getInt("windowSize") else 512
+      val sampleRate = if (options.hasKey("sampleRate")) options.getInt("sampleRate") else 16000
+      val maxSegmentMs = if (options.hasKey("maxSegmentMs")) options.getDouble("maxSegmentMs") else 0.0
+      val debug = if (options.hasKey("debug")) options.getBoolean("debug") else false
+      vadHelper.initialize(
+        modelPath, threshold, minSilenceDuration, minSpeechDuration, maxSpeechDuration,
+        windowSize, sampleRate, maxSegmentMs, debug, promise
+      )
+    } catch (e: Exception) {
+      android.util.Log.e(NAME, "initializeVad failed", e)
+      promise.reject("VAD_INIT_ERROR", e.message ?: "initializeVad failed", e)
+    }
+  }
+
+  override fun startVadDetection(promise: Promise) {
+    vadHelper.start(promise)
+  }
+
+  override fun stopVadDetection(promise: Promise) {
+    vadHelper.stop(promise)
+  }
+
+  override fun unloadVad(promise: Promise) {
+    vadHelper.unload(promise)
+  }
+
+  /**
+   * Speech-segment event. base64Pcm is little-endian Int16 at 16 kHz — the
+   * same wire form as pcmLiveStreamData. startSample is the VAD's absolute
+   * sample offset since the last reset(). viaFlush distinguishes a segment
+   * emitted by Flush() (NO trailing-silence trim) from a natural silence
+   * close (trailing minSilenceDuration trimmed); forcedByCap marks the
+   * app-side max-segment cut.
+   */
+  private fun emitVadSpeechSegment(
+    base64Pcm: String,
+    startSample: Long,
+    sampleCount: Int,
+    viaFlush: Boolean,
+    forcedByCap: Boolean,
+    latencyMs: Long
+  ) {
+    val eventEmitter = reactApplicationContext
+      .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+    val payload = Arguments.createMap()
+    payload.putString("base64Pcm", base64Pcm)
+    payload.putDouble("startSample", startSample.toDouble())
+    payload.putInt("sampleCount", sampleCount)
+    payload.putBoolean("viaFlush", viaFlush)
+    payload.putBoolean("forcedByCap", forcedByCap)
+    payload.putDouble("latencyMs", latencyMs.toDouble())
+    eventEmitter.emit("vadSpeechSegment", payload)
   }
 
   // ==================== STT Methods ====================

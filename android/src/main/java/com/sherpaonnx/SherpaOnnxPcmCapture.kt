@@ -3,6 +3,7 @@ package com.sherpaonnx
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
 import android.util.Base64
 import android.util.Log
 import java.nio.ByteBuffer
@@ -28,9 +29,22 @@ class SherpaOnnxPcmCapture(
    * single mic client without a JS round-trip. Must not block: the callee owns
    * its own buffering/threading. No behavior change when null.
    */
-  private val onRawChunk: ((samples: ShortArray, sampleRate: Int) -> Unit)? = null
+  private val onRawChunk: ((samples: ShortArray, sampleRate: Int) -> Unit)? = null,
+  /**
+   * SMRITI SPIKE — DQ-GP021-P3B-02 Candidate C (2026-09-16). NOT FOR MERGE.
+   * Which MediaRecorder.AudioSource the AudioRecord is opened with. Default is
+   * the pre-spike behaviour (VOICE_RECOGNITION); the spike sets
+   * VOICE_COMMUNICATION to test the platform's AEC path.
+   */
+  private val audioSource: Int = MediaRecorder.AudioSource.VOICE_RECOGNITION,
+  /**
+   * SMRITI SPIKE — row 4: attach an explicit AcousticEchoCanceler effect to
+   * the record session (only meaningful with VOICE_RECOGNITION). Default off.
+   */
+  private val attachAec: Boolean = false
 ) {
   private var audioRecord: AudioRecord? = null
+  private var aec: AcousticEchoCanceler? = null
   @Volatile
   private var running = false
   private var captureThread: Thread? = null
@@ -86,7 +100,7 @@ class SherpaOnnxPcmCapture(
     val bufSize = minBuf.coerceAtLeast(bufferSizeBytes)
     val record = try {
       AudioRecord(
-        MediaRecorder.AudioSource.VOICE_RECOGNITION,
+        audioSource,
         captureRate,
         AudioFormat.CHANNEL_IN_MONO,
         AudioFormat.ENCODING_PCM_16BIT,
@@ -102,6 +116,23 @@ class SherpaOnnxPcmCapture(
       onError("AudioRecord failed to initialize")
       record.release()
       return
+    }
+    // SMRITI SPIKE evidence line: proves which source each recording used.
+    Log.i(logTag, "start: audioSource=$audioSource captureRate=$captureRate bufSize=$bufSize sessionId=${record.audioSessionId} attachAec=$attachAec")
+    if (attachAec) {
+      val available = AcousticEchoCanceler.isAvailable()
+      val effect = if (available) {
+        try { AcousticEchoCanceler.create(record.audioSessionId) } catch (e: Exception) {
+          Log.w(logTag, "start: AcousticEchoCanceler.create threw", e); null
+        }
+      } else null
+      if (effect != null) {
+        val rc = effect.setEnabled(true)
+        Log.i(logTag, "start: aec available=$available created=true setEnabled rc=$rc enabled=${effect.enabled}")
+      } else {
+        Log.i(logTag, "start: aec available=$available created=false")
+      }
+      aec = effect
     }
     audioRecord = record
     running = true
@@ -133,6 +164,8 @@ class SherpaOnnxPcmCapture(
         try {
           record.stop()
         } catch (_: Exception) { }
+        try { aec?.release() } catch (_: Exception) { }
+        aec = null
         record.release()
         audioRecord = null
       }

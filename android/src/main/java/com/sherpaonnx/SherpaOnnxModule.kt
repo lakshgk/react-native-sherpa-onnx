@@ -1,6 +1,8 @@
 package com.sherpaonnx
 
 import android.net.Uri
+import android.media.MediaRecorder
+import android.provider.Settings
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReadableArray
@@ -687,10 +689,26 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
       val bufferSizeFrames = if (options.hasKey("bufferSizeFrames")) options.getDouble("bufferSizeFrames").toInt() else 0
       var startError: String? = null
       var started = false
+      // SMRITI SPIKE — DQ-GP021-P3B-02 Candidate C (2026-09-16). NOT FOR MERGE.
+      // The capture source is chosen per recording from a Settings.Global key
+      // the driver sets over adb (`settings put global smriti_spike_pcm_audio_source
+      // voice_communication|voice_recognition_aec`); unset/anything else keeps the
+      // pre-spike VOICE_RECOGNITION. Readable by any app, no permission needed.
+      val spikeSetting = try {
+        Settings.Global.getString(reactApplicationContext.contentResolver, "smriti_spike_pcm_audio_source")
+      } catch (_: Exception) { null }
+      val spikeAudioSource = when (spikeSetting) {
+        "voice_communication" -> MediaRecorder.AudioSource.VOICE_COMMUNICATION
+        else -> MediaRecorder.AudioSource.VOICE_RECOGNITION
+      }
+      val spikeAttachAec = spikeSetting == "voice_recognition_aec"
+      android.util.Log.i(NAME, "startPcmLiveStream: spikeSetting=${spikeSetting ?: "(unset)"} audioSource=$spikeAudioSource attachAec=$spikeAttachAec")
       val capture = SherpaOnnxPcmCapture(
         targetSampleRate = sampleRate,
         channelCount = channelCount,
         bufferSizeFrames = bufferSizeFrames,
+        audioSource = spikeAudioSource,
+        attachAec = spikeAttachAec,
         onChunk = { base64Pcm, sr -> emitPcmLiveStreamData(base64Pcm, sr) },
         onError = { msg ->
           if (!started) {

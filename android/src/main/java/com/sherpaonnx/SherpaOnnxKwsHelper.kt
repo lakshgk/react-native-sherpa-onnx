@@ -16,6 +16,10 @@ import com.k2fsa.sherpa.onnx.OnlineStream
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.TimeUnit
 
 /**
  * Helper for open-vocabulary keyword spotting using sherpa-onnx KeywordSpotter + OnlineStream.
@@ -40,6 +44,29 @@ internal class SherpaOnnxKwsHelper(
   )
 
   private val instances = ConcurrentHashMap<String, KwsInstance>()
+
+  /**
+   * Every KWS operation runs on this one thread (Smriti GP-2026-021 Prompt 2b, §20).
+   *
+   * Why: the React Native module methods of this package share one native-modules
+   * thread, and SherpaOnnxTtsHelper.writeTtsPcmChunk blocks that thread for a whole
+   * ~200 ms AudioTrack slice (WRITE_BLOCKING). A KWS call issued during TTS playback
+   * therefore waited behind a write: measured on a Pixel 10 Pro XL, processKwsAudioChunk
+   * 204 ms median while speaking vs 18 ms paused, and even resetKwsStream (no decode)
+   * 64 ms vs 3 ms. Moving KWS off that thread removes the wait; a SINGLE thread keeps
+   * every stream's calls in submission order and means release/unload can never run
+   * concurrently with an in-flight decode on the same native stream.
+   */
+  private val kwsExecutor: ExecutorService =
+    Executors.newSingleThreadExecutor { r -> Thread(r, "SherpaOnnxKws") }
+
+  private fun onKwsThread(promise: Promise, what: String, block: () -> Unit) {
+    try {
+      kwsExecutor.execute(block)
+    } catch (e: RejectedExecutionException) {
+      promise.reject("STATE_ERROR", "$what after KWS shutdown", e)
+    }
+  }
   private val streamToInstance = ConcurrentHashMap<String, String>()
 
   private fun getInstance(instanceId: String): KwsInstance? = instances[instanceId]
@@ -104,6 +131,26 @@ internal class SherpaOnnxKwsHelper(
     debug: Boolean?,
     modelType: String?,
     promise: Promise
+  ) = onKwsThread(promise, "initializeKws") {
+    initializeKwsNow(
+      instanceId, modelDir, keywordsFile, keywordsScore, keywordsThreshold, maxActivePaths,
+      numTrailingBlanks, numThreads, provider, debug, modelType, promise
+    )
+  }
+
+  private fun initializeKwsNow(
+    instanceId: String,
+    modelDir: String,
+    keywordsFile: String,
+    keywordsScore: Double?,
+    keywordsThreshold: Double?,
+    maxActivePaths: Double?,
+    numTrailingBlanks: Double?,
+    numThreads: Double?,
+    provider: String?,
+    debug: Boolean?,
+    modelType: String?,
+    promise: Promise
   ) {
     try {
       val paths = scanKwsModelPaths(modelDir)
@@ -144,7 +191,10 @@ internal class SherpaOnnxKwsHelper(
     }
   }
 
-  fun createKwsStream(instanceId: String, streamId: String, keywords: String?, promise: Promise) {
+  fun createKwsStream(instanceId: String, streamId: String, keywords: String?, promise: Promise) =
+    onKwsThread(promise, "createKwsStream") { createKwsStreamNow(instanceId, streamId, keywords, promise) }
+
+  private fun createKwsStreamNow(instanceId: String, streamId: String, keywords: String?, promise: Promise) {
     try {
       val inst = getInstance(instanceId)
         ?: run {
@@ -192,13 +242,30 @@ internal class SherpaOnnxKwsHelper(
     sampleRate: Int,
     promise: Promise
   ) {
+    // Copy on the calling thread: the ReadableArray is not handed across threads.
+    val floatSamples = try {
+      readableArrayToFloatArray(samples)
+    } catch (e: Exception) {
+      promise.reject("STREAM_ERROR", "processKwsAudioChunk failed: ${e.message}", e)
+      return
+    }
+    onKwsThread(promise, "processKwsAudioChunk") {
+      processKwsAudioChunkNow(streamId, floatSamples, sampleRate, promise)
+    }
+  }
+
+  private fun processKwsAudioChunkNow(
+    streamId: String,
+    floatSamples: FloatArray,
+    sampleRate: Int,
+    promise: Promise
+  ) {
     try {
       val (inst, stream) = getStream(streamId)
         ?: run {
           promise.reject("STREAM_ERROR", "Stream not found: $streamId")
           return
         }
-      val floatSamples = readableArrayToFloatArray(samples)
       stream.acceptWaveform(floatSamples, sampleRate)
       while (inst.spotter.isReady(stream)) {
         inst.spotter.decode(stream)
@@ -214,7 +281,10 @@ internal class SherpaOnnxKwsHelper(
     }
   }
 
-  fun resetKwsStream(streamId: String, promise: Promise) {
+  fun resetKwsStream(streamId: String, promise: Promise) =
+    onKwsThread(promise, "resetKwsStream") { resetKwsStreamNow(streamId, promise) }
+
+  private fun resetKwsStreamNow(streamId: String, promise: Promise) {
     try {
       val (inst, stream) = getStream(streamId)
         ?: run {
@@ -229,7 +299,10 @@ internal class SherpaOnnxKwsHelper(
     }
   }
 
-  fun releaseKwsStream(streamId: String, promise: Promise) {
+  fun releaseKwsStream(streamId: String, promise: Promise) =
+    onKwsThread(promise, "releaseKwsStream") { releaseKwsStreamNow(streamId, promise) }
+
+  private fun releaseKwsStreamNow(streamId: String, promise: Promise) {
     try {
       val instanceId = streamToInstance.remove(streamId) ?: run {
         promise.resolve(null)
@@ -247,7 +320,10 @@ internal class SherpaOnnxKwsHelper(
     }
   }
 
-  fun unloadKws(instanceId: String, promise: Promise) {
+  fun unloadKws(instanceId: String, promise: Promise) =
+    onKwsThread(promise, "unloadKws") { unloadKwsNow(instanceId, promise) }
+
+  private fun unloadKwsNow(instanceId: String, promise: Promise) {
     try {
       val inst = instances.remove(instanceId) ?: run {
         promise.resolve(null)
@@ -267,6 +343,16 @@ internal class SherpaOnnxKwsHelper(
 
   /** Call from Module.onCatalystInstanceDestroy to release all resources. */
   fun shutdown() {
+    // Release on the KWS thread (after any queued decode), then stop the thread.
+    try {
+      kwsExecutor.submit(Runnable { shutdownNow() }).get(3, TimeUnit.SECONDS)
+    } catch (e: Exception) {
+      Log.w(logTag, "shutdown: KWS release did not complete on the KWS thread: ${e.message}")
+    }
+    kwsExecutor.shutdown()
+  }
+
+  private fun shutdownNow() {
     instances.keys.toList().forEach { instanceId ->
       try {
         val inst = instances.remove(instanceId) ?: return@forEach

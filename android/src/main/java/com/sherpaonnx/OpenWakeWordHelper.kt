@@ -203,6 +203,18 @@ internal class OpenWakeWordHelper(
     promise: Promise
   ) {
     try {
+      // Takeover (Smriti GP-2026-021 Prompt 2b, §20): a previous owner that never
+      // called stop() (an abandoned / fenced session) leaves its worker running.
+      // unloadInternal() would then close the ORT sessions and reset the streaming
+      // buffers underneath that live worker — observed on device as one
+      // "OWW worker inference error ... invalid dimensions ... Expected: 16" per
+      // re-init (2/2 fenced handovers) — and start() would see running == true and
+      // adopt the orphaned worker instead of creating a fresh one. Stop and join it
+      // first, exactly as startPcmLiveStream stops an existing capture.
+      if (running || workerThread != null) {
+        Log.i(logTag, "OWW_INIT takeover: stopping a still-running worker before re-init")
+        stop(null)
+      }
       unloadInternal()
       melspecSession = createSessionFromFile(melspectrogramPath)
       embeddingSession = createSessionFromFile(embeddingPath)

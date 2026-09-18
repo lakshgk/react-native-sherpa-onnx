@@ -155,6 +155,32 @@ internal class SherpaOnnxTtsHelper(
   private val ttsInitExecutor = Executors.newSingleThreadExecutor()
 
   /**
+   * Every PCM-player operation (start, write, stop, and the player stop inside unloadTts /
+   * shutdown) runs on this one thread (Smriti GP-2026-021 Prompt 2b, DQ-GP021-P2B-06 (A)).
+   *
+   * Why: writeTtsPcmChunk blocks for a whole ~200 ms slice (AudioTrack.WRITE_BLOCKING). On the
+   * package's shared native-modules thread that held up EVERY other method of the module for
+   * the duration — measured on a Pixel 10 Pro XL: a keyword-spotter call during TTS playback
+   * 203 ms median vs 24 ms paused, and even a no-op resetKwsStream 66 ms vs 4 ms — and the
+   * wait happens at method dispatch, before any helper code runs, so no executor on the
+   * caller's side can remove it (build 5e671e74 proved that).
+   *
+   * Ordering is unchanged: these operations were previously serialised with each other by the
+   * shared thread; they are now serialised with each other by this single thread, in submission
+   * order. In particular stopPcmPlayer() (which releases the AudioTrack) still can never run
+   * concurrently with an in-flight write — the use-after-free class GP-2026-018 fixed.
+   */
+  private val pcmExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "SherpaOnnxTtsPcm") }
+
+  private fun onPcmThread(promise: Promise, what: String, block: () -> Unit) {
+    try {
+      pcmExecutor.execute(block)
+    } catch (e: java.util.concurrent.RejectedExecutionException) {
+      promise.reject("TTS_PCM_ERROR", "$what after TTS shutdown", e)
+    }
+  }
+
+  /**
    * Shuts down the TTS init executor and releases all engine instances.
    * Call from the native module's onCatalystInstanceDestroy() to avoid leaking the executor thread.
    */
@@ -168,6 +194,14 @@ internal class SherpaOnnxTtsHelper(
       Thread.currentThread().interrupt()
       ttsInitExecutor.shutdownNow()
     }
+    // Stop players on the PCM thread (after any in-flight write), then stop that thread.
+    try {
+      pcmExecutor.submit(Runnable { instances.values.forEach { it.stopPcmPlayer() } })
+        .get(3, java.util.concurrent.TimeUnit.SECONDS)
+    } catch (e: Exception) {
+      Log.w("SherpaOnnxTts", "shutdown: PCM players not stopped on the PCM thread: ${e.message}")
+    }
+    pcmExecutor.shutdown()
     instances.values.forEach { inst ->
       inst.releaseEngines()
       inst.stopPcmPlayer()
@@ -729,7 +763,10 @@ internal class SherpaOnnxTtsHelper(
     promise.resolve(null)
   }
 
-  fun startTtsPcmPlayer(instanceId: String, sampleRate: Double, channels: Double, promise: Promise) {
+  fun startTtsPcmPlayer(instanceId: String, sampleRate: Double, channels: Double, promise: Promise) =
+    onPcmThread(promise, "startTtsPcmPlayer") { startTtsPcmPlayerNow(instanceId, sampleRate, channels, promise) }
+
+  private fun startTtsPcmPlayerNow(instanceId: String, sampleRate: Double, channels: Double, promise: Promise) {
     val inst = getInstance(instanceId) ?: run {
       Log.e("SherpaOnnxTts", "TTS_PCM_ERROR: TTS instance not found: $instanceId")
       promise.reject("TTS_PCM_ERROR", "TTS instance not found: $instanceId")
@@ -773,6 +810,18 @@ internal class SherpaOnnxTtsHelper(
   }
 
   fun writeTtsPcmChunk(instanceId: String, samples: ReadableArray, promise: Promise) {
+    // Copy on the calling thread; the ReadableArray is not handed across threads.
+    val buffer = try {
+      FloatArray(samples.size()) { i -> samples.getDouble(i).toFloat() }
+    } catch (e: Exception) {
+      Log.e("SherpaOnnxTts", "TTS_PCM_ERROR: Failed to read PCM chunk", e)
+      promise.reject("TTS_PCM_ERROR", "Failed to write PCM chunk", e)
+      return
+    }
+    onPcmThread(promise, "writeTtsPcmChunk") { writeTtsPcmChunkNow(instanceId, buffer, promise) }
+  }
+
+  private fun writeTtsPcmChunkNow(instanceId: String, buffer: FloatArray, promise: Promise) {
     val inst = getInstance(instanceId) ?: run {
       Log.e("SherpaOnnxTts", "TTS_PCM_ERROR: TTS instance not found: $instanceId")
       promise.reject("TTS_PCM_ERROR", "TTS instance not found: $instanceId")
@@ -784,10 +833,6 @@ internal class SherpaOnnxTtsHelper(
       return
     }
     try {
-      val buffer = FloatArray(samples.size())
-      for (i in 0 until samples.size()) {
-        buffer[i] = samples.getDouble(i).toFloat()
-      }
       val written = track.write(buffer, 0, buffer.size, AudioTrack.WRITE_BLOCKING)
       if (written < 0) {
         Log.e("SherpaOnnxTts", "TTS_PCM_ERROR: PCM write failed: $written")
@@ -801,7 +846,10 @@ internal class SherpaOnnxTtsHelper(
     }
   }
 
-  fun stopTtsPcmPlayer(instanceId: String, promise: Promise) {
+  fun stopTtsPcmPlayer(instanceId: String, promise: Promise) =
+    onPcmThread(promise, "stopTtsPcmPlayer") { stopTtsPcmPlayerNow(instanceId, promise) }
+
+  private fun stopTtsPcmPlayerNow(instanceId: String, promise: Promise) {
     try {
       getInstance(instanceId)?.stopPcmPlayer()
       promise.resolve(null)
@@ -849,7 +897,10 @@ internal class SherpaOnnxTtsHelper(
     }
   }
 
-  fun unloadTts(instanceId: String, promise: Promise) {
+  fun unloadTts(instanceId: String, promise: Promise) =
+    onPcmThread(promise, "unloadTts") { unloadTtsNow(instanceId, promise) }
+
+  private fun unloadTtsNow(instanceId: String, promise: Promise) {
     try {
       val inst = instances.remove(instanceId)
       if (inst != null) {

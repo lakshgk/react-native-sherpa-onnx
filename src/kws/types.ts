@@ -51,6 +51,13 @@ export interface KeywordSpotterEngine {
   processChunk(samples: number[], sampleRate: number): Promise<KwsDetection>;
   /** Reset stream state manually (native auto-resets after each detection). */
   reset(): Promise<void>;
+  /**
+   * Replace the live stream with a newly created one on the same spotter,
+   * keeping the spotter's keyword set. The new stream is created before the old
+   * one is released, so if creation fails the engine keeps working on the old
+   * stream and the error is rethrown. Rejects after release().
+   */
+  renewStream(): Promise<void>;
   /** Release the stream and the spotter instance. */
   release(): Promise<void>;
 }

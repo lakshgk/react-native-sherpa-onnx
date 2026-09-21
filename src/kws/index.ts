@@ -48,7 +48,9 @@ export async function createKeywordSpotter(
   options: KwsInitOptions
 ): Promise<KeywordSpotterEngine> {
   const instanceId = `kws_${++kwsInstanceCounter}_${Date.now()}`;
-  const streamId = `kws_stream_${++kwsStreamCounter}_${Date.now()}`;
+  // `let`, not `const`: renewStream() swaps in a fresh stream on the same
+  // spotter, and processChunk / reset / release must follow it.
+  let streamId = `kws_stream_${++kwsStreamCounter}_${Date.now()}`;
 
   const initResult = await SherpaOnnx.initializeKwsWithOptions(instanceId, {
     modelDir: options.modelDir,
@@ -91,6 +93,22 @@ export async function createKeywordSpotter(
     },
     async reset(): Promise<void> {
       await SherpaOnnx.resetKwsStream(streamId);
+    },
+    async renewStream(): Promise<void> {
+      if (released) {
+        throw new Error('KWS renewStream after release');
+      }
+      // Create -> swap -> release (Smriti GP-2026-021 item 5, ruled 2026-09-21).
+      // Creating first means a failed create leaves the engine on its old,
+      // still-working stream instead of on none. `undefined` keywords fall back
+      // to the spotter's own keywordsFile, so the keyword set is unchanged.
+      const oldId = streamId;
+      const newId = `kws_stream_${++kwsStreamCounter}_${Date.now()}`;
+      await SherpaOnnx.createKwsStream(instanceId, newId, undefined);
+      streamId = newId;
+      // A failed release leaks the old stream until unloadKws, which releases
+      // every stream on the instance; not worth failing the renew over.
+      await SherpaOnnx.releaseKwsStream(oldId).catch(() => {});
     },
     async release(): Promise<void> {
       if (released) return;

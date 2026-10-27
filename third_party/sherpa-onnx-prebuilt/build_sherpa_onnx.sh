@@ -30,16 +30,21 @@ REQUIRED_ABIS="arm64-v8a armeabi-v7a x86 x86_64"
 
 # Default: no QNN (build works without QNN SDK). API: Kotlin (data-class API for Kotlin apps).
 ENABLE_QNN=OFF
+# Smriti GP-2026-072 (Route B, DL-129): --no-tts builds without TTS, so espeak-ng and piper-phonemize are not compiled in
+ENABLE_TTS=ON
 BUILD_KOTLIN_API=1
 BUILD_JAVA_API=0
 for arg in "$@"; do
     case "$arg" in
         --qnn|--enable-qnn) ENABLE_QNN=ON ;;
+        --no-tts) ENABLE_TTS=OFF ;;
+        --libs-only) BUILD_KOTLIN_API=0; BUILD_JAVA_API=0 ;;  # Smriti GP-2026-072: .so only; classes.jar then resolves from the Maven AAR
         --kotlin) BUILD_KOTLIN_API=1; BUILD_JAVA_API=0 ;;
         --java) BUILD_KOTLIN_API=0; BUILD_JAVA_API=1 ;;
         --both) BUILD_KOTLIN_API=1; BUILD_JAVA_API=1 ;;
         -h|--help)
-            echo "Usage: $0 [--qnn] [--kotlin|--java|--both]"
+            echo "Usage: $0 [--qnn] [--no-tts] [--kotlin|--java|--both]"
+            echo "  --no-tts Build without TTS: no espeak-ng (GPL-3.0) or piper-phonemize in the libraries (Smriti GP-2026-072)."
             echo "  Build sherpa-onnx Android prebuilts (all ABIs)."
             echo "  --qnn    Enable Qualcomm NPU (QNN) for arm64-v8a. Requires QNN_SDK_ROOT to be set."
             echo "  --kotlin Build Kotlin API (default): data classes, WaveReader.readWave(), etc. For Kotlin/RN apps."
@@ -277,7 +282,7 @@ build_abi() {
     export BUILD_SHARED_LIBS=ON
     export SHERPA_ONNX_ENABLE_JNI=ON
     export SHERPA_ONNX_ENABLE_C_API=ON
-    export SHERPA_ONNX_ENABLE_TTS=ON
+    export SHERPA_ONNX_ENABLE_TTS="$ENABLE_TTS"
     # OFF: we only need shared libs for the RN SDK; ON would build CLI executables (sherpa-onnx-offline etc.) which we do not use. See https://k2-fsa.github.io/sherpa/onnx/qnn/build.html
     export SHERPA_ONNX_ENABLE_BINARY=OFF
     export SHERPA_ONNX_ENABLE_RKNN=OFF

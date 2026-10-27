@@ -382,126 +382,6 @@ export interface Spec extends TurboModule {
   /** Release the native VAD. */
   unloadVad(): Promise<void>;
 
-  // ==================== TTS Methods ====================
-
-  /**
-   * Initialize Text-to-Speech (TTS) with model directory.
-   * @param instanceId - Unique ID for this engine instance (from createTTS)
-   * @param modelDir - Absolute path to model directory
-   * @param modelType - Model type ('vits', 'matcha', 'kokoro', 'kitten', 'pocket', 'zipvoice', 'supertonic', 'auto')
-   * @param numThreads - Number of threads for inference (default: 2)
-   * @param debug - Enable debug logging (default: false)
-   * @param noiseScale - Optional noise scale (VITS/Matcha)
-   * @param noiseScaleW - Optional noise scale W (VITS)
-   * @param lengthScale - Optional length scale (VITS/Matcha/Kokoro/Kitten)
-   * @param ruleFsts - Optional path(s) to rule FSTs for TTS (OfflineTtsConfig)
-   * @param ruleFars - Optional path(s) to rule FARs for TTS (OfflineTtsConfig)
-   * @param maxNumSentences - Optional max sentences per callback (default: 1)
-   * @param silenceScale - Optional silence scale on config (default: 0.2)
-   * @param provider - Optional execution provider (e.g. 'cpu', 'coreml', 'xnnpack'; default: 'cpu')
-   * @returns Object with success boolean, array of detected models (each with type and modelDir), sampleRate/numSpeakers on success, and optional error when success is false.
-   */
-  initializeTts(
-    instanceId: string,
-    modelDir: string,
-    modelType: string,
-    numThreads: number,
-    debug: boolean,
-    noiseScale?: number,
-    noiseScaleW?: number,
-    lengthScale?: number,
-    ruleFsts?: string,
-    ruleFars?: string,
-    maxNumSentences?: number,
-    silenceScale?: number,
-    provider?: string
-  ): Promise<{
-    success: boolean;
-    /** Present when success is false (native structured failure). */
-    error?: string;
-    detectedModels: Array<{ type: string; modelDir: string }>;
-    sampleRate: number;
-    numSpeakers: number;
-  }>;
-
-  /**
-   * Detect TTS model type and structure without initializing the engine.
-   * Uses the same native file-based detection as initializeTts.
-   * For Kokoro/Kitten multi-language models, also returns lexiconLanguageCandidates (e.g. ["default"], ["us-en", "gb-en", "zh"]) from detected lexicon.txt / lexicon-*.txt files.
-   * @param modelDir - Absolute path to model directory (use resolveModelPath first for asset/file paths)
-   * @param modelType - Optional: explicit type or 'auto' (default)
-   * @returns Object with success, detectedModels (array of { type, modelDir }), modelType (primary detected type), and optionally lexiconLanguageCandidates (language ids for multi-lang Kokoro/Kitten)
-   */
-  detectTtsModel(
-    modelDir: string,
-    modelType?: string
-  ): Promise<{
-    success: boolean;
-    /** Present when success is false (or native included a message). */
-    error?: string;
-    detectedModels: Array<{ type: string; modelDir: string }>;
-    modelType?: string;
-    /** Language ids from detected lexicon files (e.g. "default" for lexicon.txt, "us-en", "zh" from lexicon-us-en.txt, lexicon-zh.txt). Present for Kokoro/Kitten when multiple or single lexicon files are found; use for language selection UI. */
-    lexiconLanguageCandidates?: string[];
-  }>;
-
-  /**
-   * Update TTS model parameters by re-initializing with stored config.
-   * @param instanceId - Unique ID for this engine instance
-   * @param noiseScale - Optional noise scale override
-   * @param noiseScaleW - Optional noise scale W override
-   * @param lengthScale - Optional length scale override
-   * @returns Object with success, detectedModels, sampleRate, numSpeakers on success, and optional error when success is false.
-   */
-  updateTtsParams(
-    instanceId: string,
-    noiseScale?: number | null,
-    noiseScaleW?: number | null,
-    lengthScale?: number | null
-  ): Promise<{
-    success: boolean;
-    /** Present when success is false (native structured failure). */
-    error?: string;
-    detectedModels: Array<{ type: string; modelDir: string }>;
-    sampleRate: number;
-    numSpeakers: number;
-  }>;
-
-  /**
-   * Generate speech from text.
-   * @param instanceId - Unique ID for this engine instance
-   * @param text - Text to convert to speech
-   * @param options - Generation options: `sid`, `speed`, `silenceScale`, `numSteps`, `extra`.
-   *   Voice cloning (iOS & Android): `referenceAudio` + `referenceSampleRate` for Zipvoice/Pocket only; Zipvoice also needs non-empty `referenceText`.
-   * @returns Object with { samples: number[], sampleRate: number }
-   */
-  generateTts(
-    instanceId: string,
-    text: string,
-    options: Object
-  ): Promise<{
-    samples: number[];
-    sampleRate: number;
-  }>;
-
-  /**
-   * Generate speech with subtitle/timestamp metadata.
-   * @param instanceId - Unique ID for this engine instance
-   * @param text - Text to convert to speech
-   * @param options - Same as {@link generateTts} options plus subtitle options (`subtitleMode`, `subtitleGranularity`).
-   * @returns Object with samples, sampleRate, subtitles, and timingMode
-   */
-  generateTtsWithTimestamps(
-    instanceId: string,
-    text: string,
-    options: Object
-  ): Promise<{
-    samples: number[];
-    sampleRate: number;
-    subtitles: Array<{ text: string; start: number; end: number }>;
-    timingMode: string;
-  }>;
-
   // ==================== Alignment / Subtitle Methods ====================
 
   /**
@@ -534,72 +414,26 @@ export interface Spec extends TurboModule {
     };
   }>;
 
-  // ==================== Online (streaming) TTS Methods ====================
+  // ==================== Kokoro on ONNX Runtime (Smriti GP-2026-072) ====================
+  // Route B (DL-129): sherpa-onnx is built without TTS, so espeak-ng is not in the binaries;
+  // Kokoro v1.0 runs as a raw ONNX Runtime session (SherpaOnnxKokoroOrtHelper.kt).
+
+  /** Create a Kokoro ONNX Runtime session (CPU, `numThreads` intra-op threads); resolves a handle. */
+  createKokoroSession(modelPath: string, numThreads: number): Promise<string>;
 
   /**
-   * Generate speech in streaming mode (emits chunk events).
-   * @param instanceId - Unique ID for this engine instance
-   * @param requestId - Unique ID for this generation (included in chunk/end/error events for routing)
-   * @param text - Text to convert to speech
-   * @param options - Same shape as batch TTS; reference streaming is **Pocket-only** (Zipvoice cloning uses non-streaming generate).
+   * Run one unit: token ids (with the 0 pads), the 256-float style row, and `speed`.
+   * Resolves the waveform as little-endian float32, base64-encoded, with its sample count.
    */
-  generateTtsStream(
-    instanceId: string,
-    requestId: string,
-    text: string,
-    options: Object
-  ): Promise<void>;
+  runKokoro(
+    handle: string,
+    tokenIds: number[],
+    style: number[],
+    speed: number
+  ): Promise<{ base64: string; samples: number; runMs: number }>;
 
-  /**
-   * Cancel an ongoing streaming TTS generation.
-   * @param instanceId - Unique ID for this engine instance
-   */
-  cancelTtsStream(instanceId: string): Promise<void>;
-
-  /**
-   * Start PCM playback for streaming TTS.
-   * @param instanceId - Unique ID for this engine instance
-   * @param sampleRate - Sample rate in Hz
-   * @param channels - Number of channels (1 = mono)
-   */
-  startTtsPcmPlayer(
-    instanceId: string,
-    sampleRate: number,
-    channels: number
-  ): Promise<void>;
-
-  /**
-   * Write PCM samples to the streaming TTS player.
-   * @param instanceId - Unique ID for this engine instance
-   * @param samples - Float PCM samples in range [-1.0, 1.0]
-   */
-  writeTtsPcmChunk(instanceId: string, samples: number[]): Promise<void>;
-
-  /**
-   * Stop PCM playback for streaming TTS.
-   * @param instanceId - Unique ID for this engine instance
-   */
-  stopTtsPcmPlayer(instanceId: string): Promise<void>;
-
-  /**
-   * Get the sample rate of the initialized TTS model.
-   * @param instanceId - Unique ID for this engine instance
-   * @returns Sample rate in Hz
-   */
-  getTtsSampleRate(instanceId: string): Promise<number>;
-
-  /**
-   * Get the number of speakers/voices available in the model.
-   * @param instanceId - Unique ID for this engine instance
-   * @returns Number of speakers (0 or 1 for single-speaker models)
-   */
-  getTtsNumSpeakers(instanceId: string): Promise<number>;
-
-  /**
-   * Release TTS resources.
-   * @param instanceId - Unique ID for this engine instance
-   */
-  unloadTts(instanceId: string): Promise<void>;
+  /** Release a Kokoro session (idempotent). */
+  releaseKokoroSession(handle: string): Promise<void>;
 
   // ==================== Speech Enhancement Methods ====================
 
@@ -671,77 +505,6 @@ export interface Spec extends TurboModule {
   resetOnlineEnhancement(instanceId: string): Promise<void>;
 
   unloadOnlineEnhancement(instanceId: string): Promise<void>;
-
-  /**
-   * Save TTS audio samples to a WAV file.
-   * @param samples - Audio samples array
-   * @param sampleRate - Sample rate in Hz
-   * @param filePath - Absolute path where to save the WAV file
-   * @returns The file path where audio was saved
-   */
-  saveTtsAudioToFile(
-    samples: number[],
-    sampleRate: number,
-    filePath: string
-  ): Promise<string>;
-
-  /**
-   * Save TTS audio samples to a WAV file via Android SAF content URI.
-   * @param samples - Audio samples array
-   * @param sampleRate - Sample rate in Hz
-   * @param directoryUri - Directory content URI (tree or document)
-   * @param filename - Desired file name (e.g., tts_123.wav)
-   * @returns The content URI of the saved file
-   */
-  saveTtsAudioToContentUri(
-    samples: number[],
-    sampleRate: number,
-    directoryUri: string,
-    filename: string
-  ): Promise<string>;
-
-  /**
-   * Save a text file via Android SAF content URI.
-   * @param text - Text content to write
-   * @param directoryUri - Directory content URI (tree or document)
-   * @param filename - Desired file name (e.g., tts_123.srt)
-   * @param mimeType - MIME type (e.g., application/x-subrip)
-   * @returns The content URI of the saved file
-   */
-  saveTtsTextToContentUri(
-    text: string,
-    directoryUri: string,
-    filename: string,
-    mimeType: string
-  ): Promise<string>;
-
-  /**
-   * Copy a local file into a document under a SAF directory URI (format-agnostic; Android only).
-   * @param fileUri - Content URI of the saved WAV file
-   * @param filename - Desired cache filename
-   * @returns Absolute file path to the cached copy
-   */
-  copyFileToContentUri(
-    filePath: string,
-    directoryUri: string,
-    filename: string,
-    mimeType: string
-  ): Promise<string>;
-
-  /**
-   * Copy a SAF content URI to a cache file for local playback.
-   * @param fileUri - Content URI of the saved WAV file
-   * @param filename - Desired cache filename
-   * @returns Absolute file path to the cached copy
-   */
-  copyTtsContentUriToCache(fileUri: string, filename: string): Promise<string>;
-
-  /**
-   * Share a TTS audio file (file path or content URI).
-   * @param fileUri - File path or content URI
-   * @param mimeType - MIME type (e.g., audio/wav)
-   */
-  shareTtsAudio(fileUri: string, mimeType: string): Promise<void>;
 
   // ==================== Helper - Assets ====================
 

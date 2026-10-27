@@ -15,10 +15,10 @@
       "types": "./lib/typescript/src/stt/index.d.ts",
       "default": "./lib/module/stt/index.js"
     },
-    "./tts": {
-      "source": "./src/tts/index.ts",
-      "types": "./lib/typescript/src/tts/index.d.ts",
-      "default": "./lib/module/tts/index.js"
+    "./kokoro": {
+      "source": "./src/kokoro/index.ts",
+      "types": "./lib/typescript/src/kokoro/index.d.ts",
+      "default": "./lib/module/kokoro/index.js"
     },
     "./alignment": {
       "source": "./src/alignment/index.ts",

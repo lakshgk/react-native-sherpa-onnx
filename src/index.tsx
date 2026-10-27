@@ -16,13 +16,12 @@ export {
   resolveModelPath,
 } from './utils';
 
-export { copyFileToContentUri } from './tts';
 export * from './alignment';
 
 export { getModelLicenses, type ModelLicense } from './licenses';
 // Note: Feature-specific exports are available via subpath imports:
 // - import { createSTT, createStreamingSTT, ... } from 'react-native-sherpa-onnx/stt'
-// - import { createTTS, ... } from 'react-native-sherpa-onnx/tts'
+// - import { createKokoroOrtSession, ... } from 'react-native-sherpa-onnx/kokoro' (Smriti GP-2026-072; TTS removed)
 // - import { detectAlignmentModel, ... } from 'react-native-sherpa-onnx/alignment'
 // - import { ... } from 'react-native-sherpa-onnx/download'
 // - import { getBundledArchives, listBundledArchives, extractArchive } from 'react-native-sherpa-onnx/extraction'

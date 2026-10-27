@@ -50,14 +50,9 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
   )
   private val onlineSttHelper = SherpaOnnxOnlineSttHelper(reactApplicationContext, NAME)
   private val kwsHelper = SherpaOnnxKwsHelper(reactApplicationContext, NAME)
-  private val ttsHelper = SherpaOnnxTtsHelper(
-    reactApplicationContext,
-    { modelDir, modelType -> Companion.nativeDetectTtsModel(modelDir, modelType) },
-    { instanceId, requestId, samples, sampleRate, progress, isFinal -> emitTtsStreamChunk(instanceId, requestId, samples, sampleRate, progress, isFinal) },
-    { instanceId, requestId, message -> emitTtsStreamError(instanceId, requestId, message) },
-    { instanceId, requestId, cancelled -> emitTtsStreamEnd(instanceId, requestId, cancelled) }
-  )
   private val alignmentHelper = SherpaOnnxAlignmentHelper(reactApplicationContext)
+  // Smriti GP-2026-072 (Route B): Kokoro v1.0 on ONNX Runtime, replacing the TTS helper.
+  private val kokoroOrtHelper = SherpaOnnxKokoroOrtHelper(NAME)
   private val enhancementHelper = SherpaOnnxEnhancementHelper(
     reactApplicationContext,
     { modelDir, modelType -> Companion.nativeDetectEnhancementModel(modelDir, modelType) }
@@ -90,7 +85,7 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
     kwsHelper.shutdown()
     wakeWordHelper.shutdown()
     vadHelper.shutdown()
-    ttsHelper.shutdown()
+    kokoroOrtHelper.shutdown()
     alignmentHelper.shutdown()
     enhancementHelper.shutdown()
   }
@@ -1058,132 +1053,6 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
     }
   }
 
-  // ==================== TTS Methods ====================
-
-  /**
-   * Initialize TTS with model directory.
-   */
-  override fun initializeTts(
-    instanceId: String,
-    modelDir: String,
-    modelType: String,
-    numThreads: Double,
-    debug: Boolean,
-    noiseScale: Double?,
-    noiseScaleW: Double?,
-    lengthScale: Double?,
-    ruleFsts: String?,
-    ruleFars: String?,
-    maxNumSentences: Double?,
-    silenceScale: Double?,
-    provider: String?,
-    promise: Promise
-  ) {
-    ttsHelper.initializeTts(
-      instanceId,
-      modelDir,
-      modelType,
-      numThreads,
-      debug,
-      noiseScale,
-      noiseScaleW,
-      lengthScale,
-      ruleFsts,
-      ruleFars,
-      maxNumSentences,
-      silenceScale,
-      provider,
-      promise
-    )
-  }
-
-  /**
-   * Detect TTS model type and structure without initializing the engine.
-   */
-  override fun detectTtsModel(modelDir: String, modelType: String?, promise: Promise) {
-    try {
-      val result = Companion.nativeDetectTtsModel(modelDir, modelType ?: "auto")
-      if (result == null) {
-        android.util.Log.e(NAME, "DETECT_ERROR: TTS model detection returned null")
-        promise.reject("DETECT_ERROR", "TTS model detection returned null")
-        return
-      }
-      val success = result["success"] as? Boolean ?: false
-      val detectedModels = result["detectedModels"] as? ArrayList<*>
-        ?: arrayListOf<HashMap<String, String>>()
-      val modelTypeStr = result["modelType"] as? String
-      val paths = result["paths"] as? HashMap<*, *>
-
-      val resultMap = Arguments.createMap()
-      resultMap.putBoolean("success", success)
-      val modelsArray = Arguments.createArray()
-      for (model in detectedModels) {
-        val modelMap = model as? HashMap<*, *>
-        if (modelMap != null) {
-          val entry = Arguments.createMap()
-          entry.putString("type", modelMap["type"] as? String ?: "")
-          entry.putString("modelDir", modelMap["modelDir"] as? String ?: "")
-          modelsArray.pushMap(entry)
-        }
-      }
-      resultMap.putArray("detectedModels", modelsArray)
-      if (modelTypeStr != null) {
-        resultMap.putString("modelType", modelTypeStr)
-      }
-      val modelPath = paths?.get("model") as? String
-      if (!modelPath.isNullOrBlank()) {
-        val pathsMap = Arguments.createMap()
-        pathsMap.putString("model", modelPath)
-        resultMap.putMap("paths", pathsMap)
-      }
-      if (!success) {
-        val error = result["error"] as? String
-        if (!error.isNullOrBlank()) {
-          resultMap.putString("error", error)
-        }
-      }
-      val lexiconLanguageCandidates = result["lexiconLanguageCandidates"] as? ArrayList<*>
-      if (!lexiconLanguageCandidates.isNullOrEmpty()) {
-        val candidatesArray = Arguments.createArray()
-        for (c in lexiconLanguageCandidates) {
-          (c as? String)?.let { candidatesArray.pushString(it) }
-        }
-        resultMap.putArray("lexiconLanguageCandidates", candidatesArray)
-      }
-      promise.resolve(resultMap)
-    } catch (e: Exception) {
-      android.util.Log.e(NAME, "DETECT_ERROR: TTS model detection failed: ${e.message}", e)
-      promise.reject("DETECT_ERROR", "TTS model detection failed: ${e.message}", e)
-    }
-  }
-
-  /**
-   * Update TTS params by re-initializing with stored config.
-   */
-  override fun updateTtsParams(
-    instanceId: String,
-    noiseScale: Double?,
-    noiseScaleW: Double?,
-    lengthScale: Double?,
-    promise: Promise
-  ) {
-    ttsHelper.updateTtsParams(instanceId, noiseScale, noiseScaleW, lengthScale, promise)
-  }
-
-  /**
-   * Generate speech from text.
-   */
-  override fun generateTts(instanceId: String, text: String, options: ReadableMap?, promise: Promise) {
-    ttsHelper.generateTts(instanceId, text, options, promise)
-  }
-
-  /**
-   * Generate speech with subtitle/timestamp metadata.
-   */
-  override fun generateTtsWithTimestamps(instanceId: String, text: String, options: ReadableMap?, promise: Promise) {
-    ttsHelper.generateTtsWithTimestamps(instanceId, text, options, promise)
-  }
-
   override fun runCTCForcedAlignment(
     modelPath: String,
     audioPath: String,
@@ -1193,105 +1062,18 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
   ) {
     alignmentHelper.runCTCForcedAlignment(modelPath, audioPath, text, vocabJson, promise)
   }
+  // ==================== Kokoro on ONNX Runtime (Smriti GP-2026-072) ====================
 
-  /**
-   * Generate speech in streaming mode (emits chunk events).
-   */
-  override fun generateTtsStream(instanceId: String, requestId: String, text: String, options: ReadableMap?, promise: Promise) {
-    ttsHelper.generateTtsStream(instanceId, requestId, text, options, promise)
+  override fun createKokoroSession(modelPath: String, numThreads: Double, promise: Promise) {
+    kokoroOrtHelper.createKokoroSession(modelPath, numThreads, promise)
   }
 
-  /**
-   * Cancel ongoing streaming TTS.
-   */
-  override fun cancelTtsStream(instanceId: String, promise: Promise) {
-    ttsHelper.cancelTtsStream(instanceId, promise)
+  override fun runKokoro(handle: String, tokenIds: ReadableArray, style: ReadableArray, speed: Double, promise: Promise) {
+    kokoroOrtHelper.runKokoro(handle, tokenIds, style, speed, promise)
   }
 
-  /**
-   * Start PCM playback for streaming TTS.
-   */
-  override fun startTtsPcmPlayer(instanceId: String, sampleRate: Double, channels: Double, promise: Promise) {
-    ttsHelper.startTtsPcmPlayer(instanceId, sampleRate, channels, promise)
-  }
-
-  /**
-   * Write PCM samples to the streaming TTS player.
-   */
-  override fun writeTtsPcmChunk(instanceId: String, samples: ReadableArray, promise: Promise) {
-    ttsHelper.writeTtsPcmChunk(instanceId, samples, promise)
-  }
-
-  /**
-   * Stop PCM playback for streaming TTS.
-   */
-  override fun stopTtsPcmPlayer(instanceId: String, promise: Promise) {
-    ttsHelper.stopTtsPcmPlayer(instanceId, promise)
-  }
-
-  private fun emitTtsStreamChunk(
-    instanceId: String,
-    requestId: String,
-    samples: FloatArray,
-    sampleRate: Int,
-    progress: Float,
-    isFinal: Boolean
-  ) {
-    val eventEmitter = reactApplicationContext
-      .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-    val samplesArray = Arguments.createArray()
-    for (sample in samples) {
-      samplesArray.pushDouble(sample.toDouble())
-    }
-    val payload = Arguments.createMap()
-    payload.putString("instanceId", instanceId)
-    payload.putString("requestId", requestId)
-    payload.putArray("samples", samplesArray)
-    payload.putInt("sampleRate", sampleRate)
-    payload.putDouble("progress", progress.toDouble())
-    payload.putBoolean("isFinal", isFinal)
-    eventEmitter.emit("ttsStreamChunk", payload)
-  }
-
-  private fun emitTtsStreamError(instanceId: String, requestId: String, message: String) {
-    val eventEmitter = reactApplicationContext
-      .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-    val payload = Arguments.createMap()
-    payload.putString("instanceId", instanceId)
-    payload.putString("requestId", requestId)
-    payload.putString("message", message)
-    eventEmitter.emit("ttsStreamError", payload)
-  }
-
-  private fun emitTtsStreamEnd(instanceId: String, requestId: String, cancelled: Boolean) {
-    val eventEmitter = reactApplicationContext
-      .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-    val payload = Arguments.createMap()
-    payload.putString("instanceId", instanceId)
-    payload.putString("requestId", requestId)
-    payload.putBoolean("cancelled", cancelled)
-    eventEmitter.emit("ttsStreamEnd", payload)
-  }
-
-  /**
-   * Get TTS sample rate.
-   */
-  override fun getTtsSampleRate(instanceId: String, promise: Promise) {
-    ttsHelper.getTtsSampleRate(instanceId, promise)
-  }
-
-  /**
-   * Get number of speakers.
-   */
-  override fun getTtsNumSpeakers(instanceId: String, promise: Promise) {
-    ttsHelper.getTtsNumSpeakers(instanceId, promise)
-  }
-
-  /**
-   * Release TTS resources.
-   */
-  override fun unloadTts(instanceId: String, promise: Promise) {
-    ttsHelper.unloadTts(instanceId, promise)
+  override fun releaseKokoroSession(handle: String, promise: Promise) {
+    kokoroOrtHelper.releaseKokoroSession(handle, promise)
   }
 
   // ==================== Speech Enhancement Methods ====================
@@ -1445,75 +1227,6 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
   }
 
   /**
-   * Save TTS audio samples to a WAV file.
-   */
-  override fun saveTtsAudioToFile(
-    samples: ReadableArray,
-    sampleRate: Double,
-    filePath: String,
-    promise: Promise
-  ) {
-    ttsHelper.saveTtsAudioToFile(samples, sampleRate, filePath, promise)
-  }
-
-  /**
-   * Save TTS audio samples to a WAV file via Android SAF content URI.
-   */
-  override fun saveTtsAudioToContentUri(
-    samples: ReadableArray,
-    sampleRate: Double,
-    directoryUri: String,
-    filename: String,
-    promise: Promise
-  ) {
-    ttsHelper.saveTtsAudioToContentUri(samples, sampleRate, directoryUri, filename, promise)
-  }
-
-  /**
-   * Copy a local file into a document under a SAF directory URI (format-agnostic).
-   */
-  override fun copyFileToContentUri(
-    filePath: String,
-    directoryUri: String,
-    filename: String,
-    mimeType: String,
-    promise: Promise
-  ) {
-    ttsHelper.copyFileToContentUri(filePath, directoryUri, filename, mimeType, promise)
-  }
-
-  /**
-   * Save text content to a file via Android SAF content URI.
-   */
-  override fun saveTtsTextToContentUri(
-    text: String,
-    directoryUri: String,
-    filename: String,
-    mimeType: String,
-    promise: Promise
-  ) {
-    ttsHelper.saveTtsTextToContentUri(text, directoryUri, filename, mimeType, promise)
-  }
-
-  /**
-   * Copy a SAF content URI to a cache file for local playback.
-   */
-  override fun copyTtsContentUriToCache(
-    fileUri: String,
-    filename: String,
-    promise: Promise
-  ) {
-    ttsHelper.copyTtsContentUriToCache(fileUri, filename, promise)
-  }
-
-  /**
-   * Share a TTS audio file (file path or content URI).
-   */
-  override fun shareTtsAudio(fileUri: String, mimeType: String, promise: Promise) {
-    ttsHelper.shareTtsAudio(fileUri, mimeType, promise)
-  }
-
-  /**
    * List all model folders in the assets/models directory.
    * Scans the platform-specific model directory and returns folder names.
    */
@@ -1639,7 +1352,6 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
 
     /** Model detection for TTS: returns HashMap with success, error, detectedModels, modelType, paths (for Kotlin API config). */
     @JvmStatic
-    private external fun nativeDetectTtsModel(modelDir: String, modelType: String): HashMap<String, Any>?
 
     /** Model detection for speech enhancement: returns HashMap with success, error, detectedModels, modelType, paths. */
     @JvmStatic

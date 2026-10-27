@@ -1,4 +1,13 @@
-import type { TTSModelType } from '../tts/types';
+/** TTS model families in the download catalogue (was ../tts/types; the TTS module left with Smriti GP-2026-072). */
+export type TTSModelType =
+  | 'vits'
+  | 'matcha'
+  | 'kokoro'
+  | 'kitten'
+  | 'pocket'
+  | 'zipvoice'
+  | 'supertonic'
+  | 'auto';
 
 export enum ModelCategory {
   Tts = 'tts',

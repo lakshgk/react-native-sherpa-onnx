@@ -1350,9 +1350,6 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
       debug: Boolean
     ): HashMap<String, Any>?
 
-    /** Model detection for TTS: returns HashMap with success, error, detectedModels, modelType, paths (for Kotlin API config). */
-    @JvmStatic
-
     /** Model detection for speech enhancement: returns HashMap with success, error, detectedModels, modelType, paths. */
     @JvmStatic
     private external fun nativeDetectEnhancementModel(modelDir: String, modelType: String): HashMap<String, Any>?

@@ -22,7 +22,6 @@
 #include "model_detect_test_utils.h"
 #include "sherpa-onnx-model-detect.h"
 #include "sherpa-onnx-validate-stt.h"
-#include "sherpa-onnx-validate-tts.h"
 #include "sherpa-onnx-validate-enhancement.h"
 
 #include <gtest/gtest.h>
@@ -138,93 +137,6 @@ TEST(ModelDetectTest, DetectSttFromFileListMatchesExpected) {
             << "Asset " << block.assetName
             << " expected " << expectedType << " (" << static_cast<int>(expectedKind)
             << ") but got " << model_detect_test::SttKindToString(result.selectedKind)
-            << " (" << static_cast<int>(result.selectedKind) << ")";
-    }
-}
-
-/**
- * DetectTtsFromFileListMatchesExpected
- *
- * TTS counterpart of DetectSttFromFileListMatchesExpected. Loads tts-models-structure.txt
- * and tts-models-expected.csv, builds FileEntry lists per asset block, calls
- * DetectTtsModelFromFileList(files, modelDir, "auto"), and asserts the outcome matches the CSV:
- *
- * - Known types (vits, matcha, kokoro, kitten, pocket, zipvoice): result.ok == true and
- *   selectedKind matches. This is the full pipeline (detect + ValidateTtsPaths): ok means the
- *   layout is sufficient for native init, not merely “looks like” a type.
- * - model_type == "unsupported": not init-ready / unknown kind; result.ok == false and
- *   selectedKind == kUnknown (e.g. hardware-specific or non-model assets).
- * - model_type == "zipvoice_rejected": classified as Zipvoice but ValidateTtsPaths fails on the
- *   real release file list (e.g. missing lexicon.txt, or distill-only layout without vocoder).
- *   Expects ok == false, non-empty error, selectedKind still kZipvoice.
- *
- * Note: Some TTS types (e.g. vits) require espeak-ng-data in the fixture; otherwise
- * detection may return result.ok == false.
- */
-TEST(ModelDetectTest, DetectTtsFromFileListMatchesExpected) {
-    std::string dir = GetFixturesDir();
-    std::string structurePath = dir + "/tts-models-structure.txt";
-    std::string csvPath = dir + "/tts-models-expected.csv";
-
-    std::string err;
-    auto blocks = model_detect_test::ParseAsrStructureFile(structurePath, &err);
-    ASSERT_TRUE(err.empty()) << err;
-    ASSERT_FALSE(blocks.empty()) << "No asset blocks in " << structurePath;
-
-    auto expectedMap = model_detect_test::ParseAsrExpectedCsv(csvPath, &err);
-    ASSERT_TRUE(err.empty()) << err;
-
-    for (const auto& block : blocks) {
-        auto it = expectedMap.find(block.assetName);
-        if (it == expectedMap.end())
-            continue;
-
-        const std::string& expectedType = it->second;
-        if (expectedType == "unsupported") {
-            auto files = model_detect_test::BuildFileEntriesFromPathLines(block.modelDir, block.pathLines);
-            auto result = sherpaonnx::DetectTtsModelFromFileList(files, block.modelDir, "auto");
-            EXPECT_FALSE(result.ok)
-                << "Asset " << block.assetName << ": unsupported must not report ok=true.";
-            EXPECT_EQ(static_cast<int>(result.selectedKind), static_cast<int>(sherpaonnx::TtsModelKind::kUnknown))
-                << "Asset " << block.assetName
-                << ": unsupported must be detected as unknown kind (got " << model_detect_test::TtsKindToString(result.selectedKind) << ").";
-            continue;
-        }
-
-        if (expectedType == "zipvoice_rejected") {
-            auto files = model_detect_test::BuildFileEntriesFromPathLines(block.modelDir, block.pathLines);
-            auto result = sherpaonnx::DetectTtsModelFromFileList(files, block.modelDir, "auto");
-            EXPECT_FALSE(result.ok)
-                << "Asset " << block.assetName
-                << ": Zipvoice layout from release must be rejected when required files are missing: "
-                << result.error;
-            EXPECT_FALSE(result.error.empty())
-                << "Asset " << block.assetName << ": rejection must include an error message.";
-            EXPECT_EQ(static_cast<int>(result.selectedKind),
-                      static_cast<int>(sherpaonnx::TtsModelKind::kZipvoice))
-                << "Asset " << block.assetName
-                << ": expected kZipvoice before validation failure (got "
-                << model_detect_test::TtsKindToString(result.selectedKind) << ").";
-            std::string errLower = result.error;
-            std::transform(errLower.begin(), errLower.end(), errLower.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            EXPECT_NE(errLower.find("zipvoice"), std::string::npos)
-                << "Asset " << block.assetName << ": expected Zipvoice context in error, got: " << result.error;
-            continue;
-        }
-
-        sherpaonnx::TtsModelKind expectedKind = model_detect_test::TtsKindFromString(expectedType);
-        if (expectedKind == sherpaonnx::TtsModelKind::kUnknown)
-            continue;
-
-        auto files = model_detect_test::BuildFileEntriesFromPathLines(block.modelDir, block.pathLines);
-        auto result = sherpaonnx::DetectTtsModelFromFileList(files, block.modelDir, "auto");
-
-        ASSERT_TRUE(result.ok) << "Asset " << block.assetName << ": " << result.error;
-        EXPECT_EQ(static_cast<int>(result.selectedKind), static_cast<int>(expectedKind))
-            << "Asset " << block.assetName
-            << " expected " << expectedType << " (" << static_cast<int>(expectedKind)
-            << ") but got " << model_detect_test::TtsKindToString(result.selectedKind)
             << " (" << static_cast<int>(result.selectedKind) << ")";
     }
 }
@@ -384,87 +296,9 @@ TEST(ModelDetectValidation, SttTransducerOptionalBpeVocab) {
 // TTS validation: missing required files
 // ============================================================
 
-TEST(ModelDetectValidation, TtsKokoroMissingEspeakData) {
-    const std::string dir = "test-models/kokoro-v1.0";
-    std::vector<FE> files = {
-        MakeEntry(dir, "model.onnx"),
-        MakeEntry(dir, "tokens.txt"),
-        MakeEntry(dir, "voices.bin"),
-    };
-    auto result = sherpaonnx::DetectTtsModelFromFileList(files, dir, "kokoro");
-    EXPECT_FALSE(result.ok) << "Should fail when espeak-ng-data is missing";
-    EXPECT_NE(result.error.find("dataDir"), std::string::npos)
-        << "Error should mention 'dataDir': " << result.error;
-    EXPECT_NE(result.error.find("espeak-ng-data"), std::string::npos)
-        << "Error should include hint about espeak-ng-data: " << result.error;
-}
-
-TEST(ModelDetectValidation, TtsKokoroMissingVoices) {
-    const std::string dir = "test-models/kokoro-v1.0";
-    std::vector<FE> files = {
-        MakeEntry(dir, "model.onnx"),
-        MakeEntry(dir, "tokens.txt"),
-        MakeEntry(dir + "/espeak-ng-data", "phontab"),
-    };
-    auto result = sherpaonnx::DetectTtsModelFromFileList(files, dir, "kokoro");
-    EXPECT_FALSE(result.ok) << "Should fail when voices.bin is missing";
-    EXPECT_NE(result.error.find("voices"), std::string::npos)
-        << "Error should mention 'voices': " << result.error;
-}
-
-TEST(ModelDetectValidation, TtsVitsMissingModel) {
-    const std::string dir = "test-models/vits-piper";
-    std::vector<FE> files = {
-        MakeEntry(dir, "tokens.txt"),
-    };
-    auto result = sherpaonnx::DetectTtsModelFromFileList(files, dir, "vits");
-    EXPECT_FALSE(result.ok) << "Should fail when ttsModel is missing";
-    EXPECT_NE(result.error.find("ttsModel"), std::string::npos)
-        << "Error should mention 'ttsModel': " << result.error;
-}
-
-TEST(ModelDetectValidation, TtsPocketMissingTextConditioner) {
-    const std::string dir = "test-models/pocket-tts";
-    std::vector<FE> files = {
-        MakeEntry(dir, "lm_flow.onnx"),
-        MakeEntry(dir, "lm_main.onnx"),
-        MakeEntry(dir, "encoder.onnx"),
-        MakeEntry(dir, "decoder.onnx"),
-        MakeEntry(dir, "vocab.json"),
-        MakeEntry(dir, "token_scores.json"),
-    };
-    auto result = sherpaonnx::DetectTtsModelFromFileList(files, dir, "pocket");
-    EXPECT_FALSE(result.ok) << "Should fail when textConditioner is missing";
-    EXPECT_NE(result.error.find("textConditioner"), std::string::npos)
-        << "Error should mention 'textConditioner': " << result.error;
-}
-
 // ============================================================
 // TTS validation: optional fields do NOT cause failure
 // ============================================================
-
-TEST(ModelDetectValidation, TtsVitsOptionalDataDir) {
-    const std::string dir = "test-models/vits-piper";
-    std::vector<FE> files = {
-        MakeEntry(dir, "model.onnx"),
-        MakeEntry(dir, "tokens.txt"),
-    };
-    auto result = sherpaonnx::DetectTtsModelFromFileList(files, dir, "vits");
-    EXPECT_TRUE(result.ok) << "Should succeed without optional dataDir: " << result.error;
-    EXPECT_EQ(result.selectedKind, sherpaonnx::TtsModelKind::kVits);
-}
-
-TEST(ModelDetectValidation, TtsMatchaOptionalLexicon) {
-    const std::string dir = "test-models/matcha-tts";
-    std::vector<FE> files = {
-        MakeEntry(dir, "acoustic-model.onnx"),
-        MakeEntry(dir, "vocoder.onnx"),
-        MakeEntry(dir, "tokens.txt"),
-    };
-    auto result = sherpaonnx::DetectTtsModelFromFileList(files, dir, "matcha");
-    EXPECT_TRUE(result.ok) << "Should succeed without optional lexicon: " << result.error;
-    EXPECT_EQ(result.selectedKind, sherpaonnx::TtsModelKind::kMatcha);
-}
 
 // ============================================================
 // Direct validation function unit tests
@@ -492,37 +326,6 @@ TEST(ModelDetectValidation, ValidateSttPathsDirectMissing) {
               v.missingRequired.end());
     EXPECT_NE(std::find(v.missingRequired.begin(), v.missingRequired.end(), "tokens"),
               v.missingRequired.end());
-}
-
-TEST(ModelDetectValidation, ValidateTtsPathsDirectOk) {
-    sherpaonnx::TtsModelPaths paths;
-    paths.ttsModel = "/m/model.onnx";
-    paths.tokens = "/m/tokens.txt";
-    paths.voices = "/m/voices.bin";
-    paths.dataDir = "/m/espeak-ng-data";
-    auto v = sherpaonnx::ValidateTtsPaths(sherpaonnx::TtsModelKind::kKokoro, paths, "/m");
-    EXPECT_TRUE(v.ok);
-    EXPECT_TRUE(v.missingRequired.empty());
-}
-
-TEST(ModelDetectValidation, ValidateTtsPathsDirectMissing) {
-    sherpaonnx::TtsModelPaths paths;
-    paths.ttsModel = "/m/model.onnx";
-    auto v = sherpaonnx::ValidateTtsPaths(sherpaonnx::TtsModelKind::kKokoro, paths, "/m");
-    EXPECT_FALSE(v.ok);
-    EXPECT_EQ(v.missingRequired.size(), 3u);
-    EXPECT_NE(std::find(v.missingRequired.begin(), v.missingRequired.end(), "tokens"),
-              v.missingRequired.end());
-    EXPECT_NE(std::find(v.missingRequired.begin(), v.missingRequired.end(), "voices"),
-              v.missingRequired.end());
-    EXPECT_NE(std::find(v.missingRequired.begin(), v.missingRequired.end(), "dataDir"),
-              v.missingRequired.end());
-}
-
-TEST(ModelDetectValidation, ValidateTtsPathsUnknownKindPassesThrough) {
-    sherpaonnx::TtsModelPaths paths;
-    auto v = sherpaonnx::ValidateTtsPaths(sherpaonnx::TtsModelKind::kUnknown, paths, "/m");
-    EXPECT_TRUE(v.ok) << "Unknown kind should not fail validation";
 }
 
 TEST(ModelDetectValidation, ValidateSttPathsUnknownKindPassesThrough) {

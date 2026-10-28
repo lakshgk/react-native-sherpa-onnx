@@ -2,7 +2,7 @@
  * sherpa-onnx-module-jni.cpp
  *
  * Purpose: JNI entry points for SherpaOnnxModule: nativeTestSherpaInit, nativeCanInitQnnHtp,
- * nativeHasNnapiAccelerator, nativeDetectSttModel, nativeDetectTtsModel. Used by Kotlin to probe
+ * nativeHasNnapiAccelerator, nativeDetectSttModel. Used by Kotlin to probe
  * capabilities and get model paths for the Kotlin STT/TTS API.
  */
 #include <jni.h>
@@ -19,7 +19,6 @@
 
 #include "sherpa-onnx-model-detect.h"
 #include "sherpa-onnx-stt-wrapper.h"
-#include "sherpa-onnx-tts-wrapper.h"
 #include "sherpa-onnx-enhancement-wrapper.h"
 #include "sherpa-onnx-alignment-wrapper.h"
 
@@ -169,24 +168,6 @@ Java_com_sherpaonnx_SherpaOnnxModule_nativeDetectSttModel(
   sherpaonnx::SttDetectResult result = sherpaonnx::DetectSttModel(
       model_dir, prefer_int8, model_type_opt, (j_debug == JNI_TRUE));
   return sherpaonnx::SttDetectResultToJava(env, result);
-}
-
-// Detect TTS model in directory. Returns HashMap with success, error, detectedModels, modelType, paths.
-JNIEXPORT jobject JNICALL
-Java_com_sherpaonnx_SherpaOnnxModule_nativeDetectTtsModel(
-    JNIEnv* env,
-    jobject /* this */,
-    jstring j_model_dir,
-    jstring j_model_type) {
-  const char* model_dir_c = env->GetStringUTFChars(j_model_dir, nullptr);
-  const char* model_type_c = j_model_type ? env->GetStringUTFChars(j_model_type, nullptr) : nullptr;
-  std::string model_dir(model_dir_c ? model_dir_c : "");
-  std::string model_type(model_type_c ? model_type_c : "auto");
-  env->ReleaseStringUTFChars(j_model_dir, model_dir_c);
-  if (model_type_c) env->ReleaseStringUTFChars(j_model_type, model_type_c);
-
-  sherpaonnx::TtsDetectResult result = sherpaonnx::DetectTtsModel(model_dir, model_type);
-  return sherpaonnx::TtsDetectResultToJava(env, result);
 }
 
 // Detect enhancement model in directory. Returns HashMap with success, error, detectedModels, modelType, paths.

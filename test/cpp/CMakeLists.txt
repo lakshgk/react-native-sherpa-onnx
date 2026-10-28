@@ -11,10 +11,8 @@ set(JNI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../android/src/main/cpp/jni")
 set(PRODUCTION_SOURCES
   "${MODEL_DETECT_DIR}/sherpa-onnx-model-detect-helper.cpp"
   "${MODEL_DETECT_DIR}/sherpa-onnx-model-detect-stt.cpp"
-  "${MODEL_DETECT_DIR}/sherpa-onnx-model-detect-tts.cpp"
   "${MODEL_DETECT_DIR}/sherpa-onnx-model-detect-enhancement.cpp"
   "${MODEL_DETECT_DIR}/sherpa-onnx-validate-stt.cpp"
-  "${MODEL_DETECT_DIR}/sherpa-onnx-validate-tts.cpp"
   "${MODEL_DETECT_DIR}/sherpa-onnx-validate-enhancement.cpp"
 )
 

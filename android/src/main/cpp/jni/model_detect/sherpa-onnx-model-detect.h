@@ -248,21 +248,6 @@ SttDetectResult DetectSttModelFromFileList(
     const std::optional<std::string>& modelType = std::nullopt
 );
 
-TtsDetectResult DetectTtsModel(
-    const std::string& modelDir,
-    const std::string& modelType
-);
-
-/** Test-only: Like DetectTtsModel but takes a pre-built file list; no filesystem access.
- *  Only used by the host-side C++ test suite (test/cpp/model_detect_test.cpp). Not used in
- *  production (Android/iOS use DetectTtsModel). Does not validate modelDir existence or
- *  call FileExists / IsDirectory. */
-TtsDetectResult DetectTtsModelFromFileList(
-    const std::vector<model_detect::FileEntry>& files,
-    const std::string& modelDir,
-    const std::string& modelType = "auto"
-);
-
 EnhancementDetectResult DetectEnhancementModel(
     const std::string& modelDir,
     const std::string& modelType

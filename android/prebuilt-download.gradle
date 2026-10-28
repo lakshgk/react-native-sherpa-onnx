@@ -148,8 +148,14 @@ project.tasks.register("downloadNativeLibsIfNeeded") {
     // Smriti GP-2026-072 (Route B, DL-136; BQ-4): when TTS_OFF_RELEASE names an asset, the sherpa-onnx
     // libraries come ONLY from it — built without TTS, so no espeak-ng — and its sha256 is verified.
     // A missing asset or a mismatch fails the build: never a fall-back to the Maven AAR (TTS on).
-    def ttsOffFile = new File(thirdPartyDir, "sherpa-onnx-prebuilt/TTS_OFF_RELEASE")
+    // The file lives in android/ because the npm package's "files" whitelist ships android/ but not
+    // third_party/ (it was first placed in third_party/ and npm dropped it). Fail closed: no file means
+    // no build, unless a build opts in to TTS on with -PsherpaOnnxAllowTtsOn=true.
+    def ttsOffFile = new File(project.projectDir, "TTS_OFF_RELEASE")
     def ttsOff = [:]
+    if (!ttsOffFile.exists() && (project.findProperty("sherpaOnnxAllowTtsOn") ?: "false").toString() != "true") {
+      throw new GradleException("[sherpa-onnx] ${ttsOffFile} is missing: the TTS-off libraries cannot be fetched, and the Maven AAR (TTS on, espeak-ng) is not a fall-back. Set -PsherpaOnnxAllowTtsOn=true only for a deliberate TTS-on build.")
+    }
     if (ttsOffFile.exists()) {
       ttsOffFile.readLines().each { line ->
         def m = (line.trim() =~ /^([a-z0-9]+)=(.+)$/)

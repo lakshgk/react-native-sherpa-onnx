@@ -145,7 +145,21 @@ project.tasks.register("downloadNativeLibsIfNeeded") {
     def downloadDir = file("${project.buildDir}/prebuilt-downloads")
     def jniLibsHuman = "${project.projectDir}/src/main/jniLibs"
 
-    def currentSherpaVersion = project.ext.sherpaOnnxVersion
+    // Smriti GP-2026-072 (Route B, DL-136; BQ-4): when TTS_OFF_RELEASE names an asset, the sherpa-onnx
+    // libraries come ONLY from it — built without TTS, so no espeak-ng — and its sha256 is verified.
+    // A missing asset or a mismatch fails the build: never a fall-back to the Maven AAR (TTS on).
+    def ttsOffFile = new File(thirdPartyDir, "sherpa-onnx-prebuilt/TTS_OFF_RELEASE")
+    def ttsOff = [:]
+    if (ttsOffFile.exists()) {
+      ttsOffFile.readLines().each { line ->
+        def m = (line.trim() =~ /^([a-z0-9]+)=(.+)$/)
+        if (m) ttsOff[m[0][1]] = m[0][2].trim()
+      }
+      if (!ttsOff.url || !(ttsOff.sha256 ==~ /[0-9a-f]{64}/)) {
+        throw new GradleException("[sherpa-onnx] TTS_OFF_RELEASE needs url= and a 64-hex sha256= (${ttsOffFile})")
+      }
+    }
+    def currentSherpaVersion = project.ext.sherpaOnnxVersion + (ttsOff ? "-ttsoff-" + ttsOff.sha256.take(12) : "")
     def sherpaVersionFile = new File(downloadDir, "sherpa-onnx-version.txt")
     def storedSherpaVersion = (sherpaVersionFile.exists() ? sherpaVersionFile.text.trim() : null)
     def sherpaLibsOk = hasAllSherpaLibs()
@@ -175,7 +189,42 @@ project.tasks.register("downloadNativeLibsIfNeeded") {
     // =====================================================================
     // sherpa-onnx: JNI (.so) + C headers
     // =====================================================================
-    if (sherpaNeedsUpdate) {
+    if (sherpaNeedsUpdate && ttsOff) {
+      // Stage 0: TTS_OFF_RELEASE (Smriti GP-2026-072). No other stage runs for sherpa-onnx.
+      downloadDir.mkdirs()
+      def zip = new File(downloadDir, "sherpa-onnx-tts-off-android.zip")
+      def tmp = new File(downloadDir, "sherpa-onnx-tts-off-android.zip.part")
+      tmp.delete()
+      def proc = ['curl', '-sSfL', '--retry', '3', '-o', tmp.absolutePath, ttsOff.url].execute()
+      proc.waitFor()
+      if (proc.exitValue() != 0 || !tmp.exists()) {
+        throw new GradleException("[sherpa-onnx] TTS_OFF_RELEASE asset could not be fetched (curl exit ${proc.exitValue()}): ${ttsOff.url}")
+      }
+      def md = java.security.MessageDigest.getInstance("SHA-256")
+      tmp.withInputStream { ins -> byte[] buf = new byte[65536]; int n; while ((n = ins.read(buf)) > 0) md.update(buf, 0, n) }
+      def got = md.digest().collect { String.format("%02x", it) }.join()
+      if (got != ttsOff.sha256) {
+        tmp.delete()
+        throw new GradleException("[sherpa-onnx] TTS_OFF_RELEASE sha256 mismatch: expected ${ttsOff.sha256}, got ${got} (${ttsOff.url})")
+      }
+      zip.delete(); tmp.renameTo(zip)
+      def ex = new File(downloadDir, "sherpa-onnx-tts-off-extract")
+      if (ex.exists()) ex.deleteDir()
+      copy { from zipTree(zip); into ex }
+      requiredAbis.each { abi ->
+        requiredSherpaOnnxSoFiles.each { so ->
+          if (!new File(ex, "jni/${abi}/${so}").exists()) throw new GradleException("[sherpa-onnx] TTS_OFF_RELEASE asset lacks jni/${abi}/${so}")
+        }
+        copy { from new File(ex, "jni/${abi}"); into new File(jniLibsDir, abi) }
+      }
+      def includeSherpaDir = file("${project.projectDir}/src/main/cpp/include/sherpa-onnx")
+      includeSherpaDir.mkdirs()
+      copy { from new File(ex, "include/sherpa-onnx"); into includeSherpaDir }
+      sherpaVersionFile.text = currentSherpaVersion
+      sherpaResolved = true
+      println "[sherpa-onnx] jniLibs + C headers ................. TTS_OFF_RELEASE  sha256=${got}"
+      println "[sherpa-onnx] version stamp ...................... written  ${sherpaVersionFile.name}=${currentSherpaVersion}"
+    } else if (sherpaNeedsUpdate) {
       // Stage 1: THIRD_PARTY
       def tpJni = hasAllLibsUnder(thirdPartySherpaDir, requiredSherpaOnnxSoFiles)
       def tpHdr = new File(thirdPartySherpaDir, "include/sherpa-onnx/c-api/c-api.h").exists()

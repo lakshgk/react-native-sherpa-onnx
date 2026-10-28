@@ -1,0 +1,3 @@
+# Smriti GP-2026-072 (Route B, DL-136; BQ-4): the sherpa-onnx libraries come only from this asset (TTS off).
+url=https://github.com/lakshgk/react-native-sherpa-onnx/releases/download/tts-off-1.12.34-12e8114/sherpa-onnx-tts-off-android.zip
+sha256=9b103e9b2f01105c0f154290c9f1028b1b2432ea7236e5ac8a50e6023a190c83

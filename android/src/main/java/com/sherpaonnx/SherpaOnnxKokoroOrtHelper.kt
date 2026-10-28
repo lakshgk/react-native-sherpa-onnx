@@ -81,13 +81,15 @@ class SherpaOnnxKokoroOrtHelper(private val logTag: String) {
         if (!File(resolved).isFile) {
           throw IllegalArgumentException("Kokoro model file does not exist: $resolved")
         }
-        val options = OrtSession.SessionOptions().apply {
-          setIntraOpNumThreads(numThreads.toInt())
-          setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+        // The options hold native memory of their own and are closed once the
+        // session is built (the session keeps its own copy) — Smriti GP-2026-072 G3.
+        val session = OrtSession.SessionOptions().use { options ->
+          options.setIntraOpNumThreads(numThreads.toInt())
+          options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+          // By path, not by bytes: a 325 MB model read into a byte array first
+          // would hold it twice while the session is built.
+          env.createSession(resolved, options)
         }
-        // By path, not by bytes: a 325 MB model read into a byte array first
-        // would hold it twice while the session is built.
-        val session = env.createSession(resolved, options)
         val id = "kokoro_ort_${nextId.getAndIncrement()}"
         sessions[id] = session
         Log.i(logTag, "KOKORO_ORT create id=$id threads=${numThreads.toInt()}")

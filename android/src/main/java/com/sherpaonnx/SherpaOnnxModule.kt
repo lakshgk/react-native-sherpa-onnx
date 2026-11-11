@@ -49,7 +49,6 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
     NAME
   )
   private val onlineSttHelper = SherpaOnnxOnlineSttHelper(reactApplicationContext, NAME)
-  private val kwsHelper = SherpaOnnxKwsHelper(reactApplicationContext, NAME)
   private val alignmentHelper = SherpaOnnxAlignmentHelper(reactApplicationContext)
   // Smriti GP-2026-072 (Route B): Kokoro v1.0 on ONNX Runtime, replacing the TTS helper.
   private val kokoroOrtHelper = SherpaOnnxKokoroOrtHelper(NAME)
@@ -82,7 +81,6 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
     pcmCapture?.stop()
     pcmCapture = null
     onlineSttHelper.shutdown()
-    kwsHelper.shutdown()
     wakeWordHelper.shutdown()
     vadHelper.shutdown()
     kokoroOrtHelper.shutdown()
@@ -614,63 +612,6 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) :
 
   override fun processSttAudioChunk(streamId: String, samples: ReadableArray, sampleRate: Double, promise: Promise) {
     onlineSttHelper.processSttAudioChunk(streamId, samples, sampleRate.toInt(), promise)
-  }
-
-  // ==================== Keyword Spotting (KWS) Methods ====================
-
-  override fun initializeKwsWithOptions(instanceId: String, options: ReadableMap, promise: Promise) {
-    val modelDir = options.getString("modelDir")
-    if (modelDir.isNullOrEmpty()) {
-      promise.reject("INIT_ERROR", "modelDir is required")
-      return
-    }
-    val keywordsFile = options.getString("keywordsFile")
-    if (keywordsFile.isNullOrEmpty()) {
-      promise.reject("INIT_ERROR", "keywordsFile is required")
-      return
-    }
-    val keywordsScore = if (options.hasKey("keywordsScore")) options.getDouble("keywordsScore") else null
-    val keywordsThreshold = if (options.hasKey("keywordsThreshold")) options.getDouble("keywordsThreshold") else null
-    val maxActivePaths = if (options.hasKey("maxActivePaths")) options.getDouble("maxActivePaths") else null
-    val numTrailingBlanks = if (options.hasKey("numTrailingBlanks")) options.getDouble("numTrailingBlanks") else null
-    val numThreads = if (options.hasKey("numThreads")) options.getDouble("numThreads") else null
-    val provider = if (options.hasKey("provider")) options.getString("provider") else null
-    val debug = if (options.hasKey("debug")) options.getBoolean("debug") else null
-    val modelType = if (options.hasKey("modelType")) options.getString("modelType") else null
-    kwsHelper.initializeKws(
-      instanceId,
-      modelDir,
-      keywordsFile,
-      keywordsScore,
-      keywordsThreshold,
-      maxActivePaths,
-      numTrailingBlanks,
-      numThreads,
-      provider,
-      debug,
-      modelType,
-      promise
-    )
-  }
-
-  override fun createKwsStream(instanceId: String, streamId: String, keywords: String?, promise: Promise) {
-    kwsHelper.createKwsStream(instanceId, streamId, keywords, promise)
-  }
-
-  override fun processKwsAudioChunk(streamId: String, samples: ReadableArray, sampleRate: Double, promise: Promise) {
-    kwsHelper.processKwsAudioChunk(streamId, samples, sampleRate.toInt(), promise)
-  }
-
-  override fun resetKwsStream(streamId: String, promise: Promise) {
-    kwsHelper.resetKwsStream(streamId, promise)
-  }
-
-  override fun releaseKwsStream(streamId: String, promise: Promise) {
-    kwsHelper.releaseKwsStream(streamId, promise)
-  }
-
-  override fun unloadKws(instanceId: String, promise: Promise) {
-    kwsHelper.unloadKws(instanceId, promise)
   }
 
   override fun startPcmLiveStream(options: ReadableMap, promise: Promise) {

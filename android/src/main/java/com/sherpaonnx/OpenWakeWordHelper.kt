@@ -28,7 +28,7 @@ import kotlin.random.Random
  * CONFIDENCE ZONES
  *   PATTERN     → lifecycle promise plumbing (initialize/start/stop/unload/
  *                 shutdown result+reject conventions; follows
- *                 SherpaOnnxKwsHelper.kt)
+ *                 the former SherpaOnnxKwsHelper.kt, removed Smriti GP-2026-073)
  *   SEMANTIC    → companion constants (pipeline geometry);
  *                 acceptPcmChunk + bounded queue + worker re-chunking
  *                 (INV-OWW-002, INV-OWW-003 cadence);
@@ -341,7 +341,7 @@ internal class OpenWakeWordHelper(
     }
   }
 
-  /** Call from Module.onCatalystInstanceDestroy (same pattern as SherpaOnnxKwsHelper.shutdown). */
+  /** Call from Module.onCatalystInstanceDestroy. */
   fun shutdown() {
     try {
       stop(null)
